@@ -84,6 +84,7 @@ class HtmlServer {
       .replace(/\[%content%\]/g, content) // Content is assumed to be already-safe HTML
       .replace(/\[%ver%\]/g, this.escapeHtml(renderOptions.version))
       .replace(/\[%download-date%\]/g, this.escapeHtml(renderOptions.downloadDate))
+      .replace(/\[%crawler-date%\]/g, this.escapeHtml(renderOptions.crawlerDate || renderOptions.downloadDate || 'Never'))
       .replace(/\[%total-resources%\]/g, this.escapeHtml(renderOptions.totalResources.toLocaleString()))
       .replace(/\[%total-packages%\]/g, this.escapeHtml(renderOptions.totalPackages.toLocaleString()))
       .replace(/\[%endpoint-path%\]/g, this.escapeHtml(renderOptions.endpointpath))

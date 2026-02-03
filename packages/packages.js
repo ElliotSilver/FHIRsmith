@@ -421,8 +421,15 @@ class PackagesModule {
       // Get counts from database
       const tableCounts = await this.getDatabaseTableCounts();
 
+      // Format crawler date
+      let crawlerDate = 'Never';
+      if (this.lastRunTime) {
+        crawlerDate = new Date(this.lastRunTime).toLocaleDateString();
+      }
+
       return {
         downloadDate: downloadDate,
+        crawlerDate: crawlerDate,
         totalResources: 0, // Packages don't track individual resources
         totalPackages: tableCounts.packages || 0,
         totalVersions: tableCounts.packageVersions || 0,
@@ -437,6 +444,7 @@ class PackagesModule {
 
       return {
         downloadDate: 'Error',
+        crawlerDate: 'Never',
         totalResources: 0,
         totalPackages: 0,
         totalVersions: 0,
