@@ -221,28 +221,28 @@ async function buildRootPageContent() {
   content += '<ul class="list-group">';
 
   // Check which modules are enabled and add them to the list
-  if (config.modules.packages.enabled) {
+  if (config.modules.packages && config.modules.packages.enabled) {
     mc++;
     content += '<li class="list-group-item">';
     content += '<a href="/packages" class="text-decoration-none">Package Server</a>: Browse and download FHIR Implementation Guide packages';
     content += '</li>';
   }
 
-  if (config.modules.xig.enabled) {
+  if (config.modules.xig && config.modules.xig.enabled) {
     mc++;
     content += '<li class="list-group-item">';
     content += '<a href="/xig" class="text-decoration-none">FHIR IG Statistics</a>: Statistics and analysis of FHIR Implementation Guides';
     content += '</li>';
   }
 
-  if (config.modules.shl.enabled) {
+  if (config.modules.shl && config.modules.shl.enabled) {
     mc++;
     content += '<li class="list-group-item">';
     content += '<a href="/shl" class="text-decoration-none">SHL Server</a>: SMART Health Links management and validation';
     content += '</li>';
   }
 
-  if (config.modules.vcl.enabled) {
+  if (config.modules.vcl && config.modules.vcl.enabled) {
     mc++;
     content += '<li class="list-group-item">';
     content += '<a href="/VCL" class="text-decoration-none">VCL Server</a>: ValueSet Compose Language expression parsing';
