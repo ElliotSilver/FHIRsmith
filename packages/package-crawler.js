@@ -27,19 +27,20 @@ class PackageCrawler {
     this.log = log;
     
     const startTime = Date.now();
+    const masterSource = this.config.masterFile || this.config.masterUrl;
     this.crawlerLog = {
       startTime: new Date().toISOString(),
-      master: this.config.masterUrl,
+      master: masterSource,
       feeds: [],
       totalBytes: 0,
       errors: ''
     };
 
-    this.log.info('Running web crawler for packages using master URL: '+ this.config.masterUrl);
+    this.log.info('Running web crawler for packages using master source: '+ masterSource);
 
     try {
-      // Fetch the master JSON file
-      const masterResponse = await this.fetchJson(this.config.masterUrl);
+      // Fetch the master JSON file using unified fetchJson method
+      const masterResponse = await this.fetchJson(masterSource);
 
       if (!masterResponse.feeds || !Array.isArray(masterResponse.feeds)) {
         throw new Error('Invalid master JSON: missing feeds array');
@@ -58,7 +59,7 @@ class PackageCrawler {
         try {
           await this.updateTheFeed(
             this.fixUrl(feedConfig.url),
-            this.config.masterUrl,
+            masterSource,
             feedConfig.errors ? feedConfig.errors.replace(/\|/g, '@').replace(/_/g, '.') : '',
             packageRestrictions
           );
@@ -93,7 +94,30 @@ class PackageCrawler {
     return url.replace(/^http:/, 'https:');
   }
 
-  async fetchJson(url) {
+  async fetchJson(source) {
+    // Determine if source is a file path or URL
+    if (this.isFilePath(source)) {
+      return await this.fetchJsonFromFile(source);
+    } else {
+      return await this.fetchJsonFromUrl(source);
+    }
+  }
+
+  isFilePath(source) {
+    // Check if it's a file path (not a URL)
+    return !source.startsWith('http://') && !source.startsWith('https://');
+  }
+
+  async fetchJsonFromFile(filePath) {
+    try {
+      const data = await fs.promises.readFile(filePath, 'utf8');
+      return JSON.parse(data);
+    } catch (error) {
+      throw new Error(`Failed to read JSON from file ${filePath}: ${error.message}`);
+    }
+  }
+
+  async fetchJsonFromUrl(url) {
     try {
       const response = await axios.get(url, {
         timeout: 30000,

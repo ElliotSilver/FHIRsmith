@@ -563,10 +563,24 @@ class PackagesModule {
   async initialize(config) {
     this.config = config;
 
-    // Set default masterUrl if not configured
-    if (!this.config.masterUrl) {
+    // Validate masterFile/masterUrl configuration
+    if (this.config.masterFile && this.config.masterUrl) {
+      throw new Error('Cannot specify both masterFile and masterUrl. Please use only one.');
+    }
+
+    // Process masterFile if specified - normalize path early
+    if (this.config.masterFile) {
+      // If not absolute path, resolve relative to data directory
+      if (!path.isAbsolute(this.config.masterFile)) {
+        this.config.masterFile = folders.filePath(this.config.masterFile);
+      }
+      pckLog.info(`Using masterFile: ${this.config.masterFile}`);
+    }
+
+    // Set default masterUrl if neither masterFile nor masterUrl configured
+    if (!this.config.masterFile && !this.config.masterUrl) {
       this.config.masterUrl = 'https://fhir.github.io/ig-registry/package-feeds.json';
-      pckLog.info('No masterUrl configured, using default:', this.config.masterUrl);
+      pckLog.info('No masterFile or masterUrl configured, using default masterUrl:', this.config.masterUrl);
     }
 
     pckLog.info('Initializing Packages module...');
@@ -834,21 +848,22 @@ class PackagesModule {
   async runWebCrawler() {
     const startTime = Date.now();
     this.totalRuns++;
+    const masterSource = this.config.masterFile || this.config.masterUrl;
     this.crawlerLog = {
       runNumber: this.totalRuns,
       startTime: new Date().toISOString(),
-      master: this.config.masterUrl,
+      master: masterSource,
       feeds: [],
       totalBytes: 0,
       errors: ''
     };
 
     pckLog.info(`Running web crawler for packages (run #${this.totalRuns})...`);
-    pckLog.info('Fetching master URL:', this.config.masterUrl);
+    pckLog.info('Fetching master from:', masterSource);
 
     try {
-      // Fetch the master JSON file
-      const masterResponse = await this.fetchJson(this.config.masterUrl);
+      // Fetch the master JSON file using crawler's unified fetchJson method
+      const masterResponse = await this.crawler.fetchJson(masterSource);
 
       if (!masterResponse.feeds || !Array.isArray(masterResponse.feeds)) {
         throw new Error('Invalid master JSON: missing feeds array');
@@ -867,7 +882,7 @@ class PackagesModule {
         try {
           await this.updateTheFeed(
             this.fixUrl(feedConfig.url),
-            this.config.masterUrl,
+            masterSource,
             feedConfig.errors ? feedConfig.errors.replace(/\|/g, '@').replace(/_/g, '.') : '',
             packageRestrictions
           );
@@ -1220,7 +1235,8 @@ class PackagesModule {
               mirror: this.config.mirrorPath
             },
             config: {
-              masterUrl: this.config.masterUrl
+              masterUrl: this.config.masterUrl,
+              masterFile: this.config.masterFile
             }
           });
         }
@@ -2767,7 +2783,11 @@ class PackagesModule {
     if (this.lastRunTime) {
       content += `<tr><td>Last Run</td><td>${new Date(this.lastRunTime).toLocaleString()}</td></tr>`;
     }
-    content += `<tr><td>Master URL</td><td><a href="${htmlServer.escapeHtml(this.config.masterUrl)}" target="_blank">${htmlServer.escapeHtml(this.config.masterUrl)}</a></td></tr>`;
+    if (this.config.masterFile) {
+      content += `<tr><td>Master File</td><td>${htmlServer.escapeHtml(this.config.masterFile)}</td></tr>`;
+    } else {
+      content += `<tr><td>Master URL</td><td><a href="${htmlServer.escapeHtml(this.config.masterUrl)}" target="_blank">${htmlServer.escapeHtml(this.config.masterUrl)}</a></td></tr>`;
+    }
     content += '</table>';
     content += '</div>';
     content += '</div>';
