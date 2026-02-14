@@ -451,7 +451,7 @@ class ValueSetExpander {
             if (cp.code === pn) {
               let vn = getValueName(cp);
               let v = cp[vn];
-              this.defineProperty(expansion, n, this.getPropUrl(cs, pn), pn, vn, v);
+              this.defineProperty(expansion, n, this.getPropUrl(cs, pn, cp), pn, vn, v);
             }
           }
         }
@@ -1296,7 +1296,7 @@ class ValueSetExpander {
     let list;
     if (notClosed.value) {
       if (!Extensions.has(exp, 'http://hl7.org/fhir/StructureDefinition/valueset-unclosed')) {
-      Extensions.addBoolean(exp, 'http://hl7.org/fhir/StructureDefinition/valueset-unclosed', true);
+        Extensions.addBoolean(exp, 'http://hl7.org/fhir/StructureDefinition/valueset-unclosed', true);
       }
       if (this.totalStatus === 'set' && this.total > -1) {
         exp.total = this.total;
@@ -1521,7 +1521,10 @@ class ValueSetExpander {
     this.totalStatus = 'off';
   }
 
-  getPropUrl(cs, pn) {
+  getPropUrl(cs, pn, cp) {
+    if (cp.definition?.uri) {
+      return cp.definition.uri;
+    }
     for (let p of cs.propertyDefinitions()) {
       if (pn == p.code) {
         return p.uri;

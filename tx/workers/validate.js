@@ -1242,7 +1242,7 @@ class ValueSetChecker {
               msg(m);
               op.addIssue(new Issue(severity, 'invalid', addToPath(path, 'display'), baseMsg, m, 'invalid-display'));
             }
-            if (prov.version()) {
+            if (prov.version() && code.coding.length < 2) {
               result.addParamStr('version', prov.version());
             }
           }

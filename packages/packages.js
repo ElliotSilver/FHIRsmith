@@ -15,6 +15,7 @@ const folders = require('../library/folder-setup');
 
 const Logger = require('../library/logger');
 const {validateParameter} = require("../library/utilities");
+const {describeCron} = require("../library/cron-utilities");
 const pckLog = Logger.getInstance().child({ module: 'packages' });
 
 class PackagesModule {
@@ -804,6 +805,7 @@ class PackagesModule {
 
   startCrawlerJob() {
     if (this.config.crawler && this.config.crawler.schedule) {
+      this.stats.addTask("Package Crawler", describeCron(this.config.crawler.schedule));
       this.crawlerJob = cron.schedule(this.config.crawler.schedule, async () => {
         pckLog.info('Starting scheduled package crawler...');
         try {

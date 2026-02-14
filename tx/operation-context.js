@@ -53,9 +53,6 @@ class ResourceCache {
     this.stats = stats;
     this.cache = new Map();
     this.locks = new Map(); // For thread-safety with async operations
-    if (this.stats) {
-      this.stats.task("Client Cache", "Initialized");
-    }
   }
 
   /**
@@ -201,9 +198,6 @@ class ExpansionCache {
     this.cache = new Map();
     this.maxSize = maxSize;
     this.memoryThresholdBytes = memoryThresholdMB * 1024 * 1024;
-    if (this.stats) {
-      this.stats.task('Expansion Cache', 'Initialized');
-    }
   }
 
   /**
@@ -489,7 +483,7 @@ class OperationContext {
   seeContext(vurl) {
     if (this.contexts.includes(vurl)) {
       const contextList = '[' + this.contexts.join(', ') + ']';
-      throw new Issue("error", "processing", null, 'VALUESET_CIRCULAR_REFERENCE', this.i18n.formatMessage(this.langs, 'VALUESET_CIRCULAR_REFERENCE', [vurl, contextList]), null).handleAsOO(400);
+      throw new Issue("error", "processing", null, 'VALUESET_CIRCULAR_REFERENCE', this.i18n.formatMessage(this.langs, 'VALUESET_CIRCULAR_REFERENCE', [vurl, contextList]), "vs-invalid").handleAsOO(400);
     }
     this.contexts.push(vurl);
   }
