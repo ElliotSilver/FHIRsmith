@@ -326,6 +326,7 @@ class TokenModule {
     this.log.info('OAuth strategies configured:', configuredStrategies);
   }
 
+  // eslint-disable-next-line no-unused-vars
   async handleOAuthCallback(req, provider, profile, tokens) {
     const email = this.extractEmail(profile);
     const name = this.extractName(profile);
@@ -929,6 +930,7 @@ class TokenModule {
     });
   }
 
+  // eslint-disable-next-line no-unused-vars
   async updateKeyLastUsed(keyId, ip = null) {
     return new Promise((resolve, reject) => {
       this.db.run(
@@ -1005,6 +1007,7 @@ class TokenModule {
   }
 
   async logSecurityEvent(userId, eventType, ip, userAgent, details) {
+    // eslint-disable-next-line no-unused-vars
     return new Promise((resolve, reject) => {
       this.db.run(
         'INSERT INTO security_log (user_id, event_type, ip_address, user_agent, details) VALUES (?, ?, ?, ?, ?)',
@@ -1021,6 +1024,7 @@ class TokenModule {
   }
 
   // Content builders
+  // eslint-disable-next-line no-unused-vars
   buildDashboardContent(user, apiKeys, usageStats) {
     let content = `
       <div class="row mb-4">
