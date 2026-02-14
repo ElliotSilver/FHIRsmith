@@ -12,7 +12,7 @@ const path = require('path');
 const fs = require('fs');
 const folders = require('./library/folder-setup');  // <-- ADD: load early
 const { statSync, readdirSync } = require('fs');
-const { execSync } = require('os'); // not needed, we'll use statfs
+const escape = require('escape-html');
 
 // Load configuration BEFORE logger
 let config;
@@ -48,7 +48,7 @@ const packageJson = require('./package.json');
 const htmlServer = require('./library/html-server');
 const ServerStats = require("./stats");
 const {Liquid} = require("liquidjs");
-const {escapeHtml} = require("./library/utilities");
+
 htmlServer.useLog(serverLog);
 
 const app = express();
@@ -335,7 +335,7 @@ async function buildRootPageContent() {
   content += '<table class="grid">';
   content += '<tr>';
   content += `<td><strong>Module Count:</strong> ${mc}</td>`;
-  content += `<td><strong>Uptime:</strong> ${escapeHtml(uptimeStr)}</td>`;
+  content += `<td><strong>Uptime:</strong> ${escape(uptimeStr)}</td>`;
   content += `<td><strong>Request Count:</strong> ${stats.requestCount}</td>`;
   content += '</tr>';
   content += '<tr>';
@@ -391,7 +391,7 @@ app.get('/', async (req, res) => {
         processingTime: Date.now() - startTime
       };
 
-      const html = htmlServer.renderPage('root', config.hostName || 'FHIRsmith Server', content, stats);
+      const html = htmlServer.renderPage('root', escape(config.hostName) || 'FHIRsmith Server', content, stats);
       res.setHeader('Content-Type', 'text/html');
       res.send(html);
     } catch (error) {

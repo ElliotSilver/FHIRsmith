@@ -1,5 +1,6 @@
 const { monitorEventLoopDelay } = require('perf_hooks');
 const {Utilities} = require("./library/utilities");
+const escape = require('escape-html');
 
 class ServerStats {
   started = false;
@@ -97,9 +98,9 @@ class ServerStats {
     html += "<tr><th>Task</th><th>Status</th><th>Frequency</th><th>Last Seen</th></tr>";
     for (let m of this.taskMap.keys()) {
       html += "<tr><td>";
-      html += Utilities.escapeHtml(m);
+      html += escape(m);
       html += "</td><td>";
-      html += Utilities.escapeHtml(this.taskMap.get(m).state);
+      html += escape(this.taskMap.get(m).state);
       html += "</td><td>";
       html += this.taskMap.get(m).frequency;
       html += "</td><td>";
