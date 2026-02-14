@@ -60,22 +60,6 @@ const Utilities = {
     }
 
     return parts.join(' ');
-  },
-
-  escapeHtml(text) {
-    if (typeof text !== 'string') {
-      return String(text);
-    }
-
-    const map = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;'
-    };
-
-    return text.replace(/[&<>"']/g, function(m) { return map[m]; });
   }
 
 };
@@ -218,26 +202,4 @@ function isAbsoluteUrl(s) {
   return s && (s.startsWith('urn:') || s.startsWith('http:') || s.startsWith('https:') || s.startsWith('ftp:'));
 }
 
-/**
- * Escape HTML special characters
- */
-function escapeHtml(text) {
-  if (text === null || text === undefined) {
-    return '';
-  }
-  if (typeof text !== 'string') {
-    return String(text);
-  }
-
-  const map = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#x27;'
-  };
-
-  return text.replace(/[&<>"']/g, m => map[m]);
-}
-
-module.exports = { Utilities, validateParameter, validateOptionalParameter, validateArrayParameter, validateResource, strToBool, getValuePrimitive, getValueDT, getValueName, isAbsoluteUrl, escapeHtml };
+module.exports = { Utilities, validateParameter, validateOptionalParameter, validateArrayParameter, validateResource, strToBool, getValuePrimitive, getValueDT, getValueName, isAbsoluteUrl };
