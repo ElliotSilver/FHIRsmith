@@ -123,7 +123,7 @@ class TxParameters {
           try {
             this.DisplayLanguages = Languages.fromAcceptLanguage(getValuePrimitive(p), this.languageDefinitions, !this.validating);
           } catch (error) {
-            throw new Issue("error", "processing", null, 'INVALID_DISPLAY_NAME', this.i18n.translate('INVALID_DISPLAY_NAME', this.HTTPLanguages, [getValuePrimitive(p)])).handleAsOO(400);
+            throw new Issue("error", "processing", null, 'INVALID_DISPLAY_NAME', this.i18n.translate('INVALID_DISPLAY_NAME', this.HTTPLanguages, [getValuePrimitive(p)]), "invalid-display").handleAsOO(400);
           }
           break;
         }

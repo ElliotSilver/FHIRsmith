@@ -17,7 +17,6 @@ class PackageCrawler {
     this.config = config;
     this.db = db;
     this.stats = stats;
-    this.stats.task('Package Crawler', 'Initialised');
     this.totalBytes = 0;
     this.crawlerLog = {};
     this.errors = '';

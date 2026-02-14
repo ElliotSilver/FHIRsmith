@@ -25,7 +25,6 @@ class RegistryModule {
     this.currentData = null;
     this.dataLock = false;
     this.stats = stats;
-    this.stats.task('TxRegistry', 'Initialized');
   }
 
   /**
@@ -120,6 +119,7 @@ class RegistryModule {
     }, 5000);
 
     // Set up periodic crawling
+    this.stats.addTask("TxRegistry", `${intervalMinutes} min`);
     this.crawlInterval = setInterval(() => {
       this.performCrawl();
     }, intervalMs);

@@ -60,7 +60,7 @@ class VSACValueSetProvider extends AbstractValueSetProvider {
     if (this.initialized) {
       return;
     }
-    this.stats.task('VSAC Sync', 'Not run yet');
+    this.stats.addTask('VSAC Sync', `${this.refreshIntervalHours} hours`);
 
     // Create database if it doesn't exist
     if (!(await this.database.exists())) {

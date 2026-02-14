@@ -646,6 +646,15 @@ class FhirCodeSystemProvider extends CodeSystemProvider {
     return extensions.length > 0 ? extensions : null;
   }
 
+  getPropertyDefinition(cs, code) {
+    for (let p of cs.property || []) {
+      if (code == p.code) {
+        return p;
+      }
+    }
+    return undefined;
+  }
+
   /**
    * @param {string|FhirCodeSystemProviderContext} context - Code or context
    * @returns {Promise<Object[]|null>} Properties, if any
@@ -660,16 +669,20 @@ class FhirCodeSystemProvider extends CodeSystemProvider {
     const properties = [];
 
     // Add properties from main concept
-    if (ctxt.concept.property && Array.isArray(ctxt.concept.property)) {
-      properties.push(...ctxt.concept.property);
+    for (let p of ctxt.concept.property || []) {
+      let pd = this.getPropertyDefinition(this.codeSystem.jsonObj, p.code);
+      properties.push({ ...p, definition: pd });
     }
 
     // Add properties from supplements
     if (this.supplements) {
       for (const supplement of this.supplements) {
         const supplementConcept = supplement.getConceptByCode(ctxt.code);
-        if (supplementConcept && supplementConcept.property && Array.isArray(supplementConcept.property)) {
-          properties.push(...supplementConcept.property);
+        if (supplementConcept) {
+          for (let p of supplementConcept.property || []) {
+            let pd = this.getPropertyDefinition(supplement.jsonObj, p.code);
+            properties.push({...p, definition: pd});
+          }
         }
       }
     }
