@@ -258,7 +258,7 @@ class CPTServices extends CodeSystemProvider {
       }
     } else if (ctxt instanceof CPTConcept) {
       // Add designations
-      if (this.#hasProp(props, 'designation', true)) {
+      if (this._hasProp(props, 'designation', true)) {
         for (const d of ctxt.designations) {
           this.#addProperty(params, 'designation', d.kind, d.value, 'en');
         }
@@ -266,7 +266,7 @@ class CPTServices extends CodeSystemProvider {
 
       // Add properties
       for (const p of ctxt.properties) {
-        if (this.#hasProp(props, p.name, true)) {
+        if (this._hasProp(props, p.name, true)) {
           this.#addProperty(params, 'property', p.name, p.value);
         }
       }

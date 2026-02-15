@@ -9,6 +9,7 @@ const assert = require('assert');
 const {UcumService} = require("../library/ucum-service");
 const {validateArrayParameter, validateParameter, validateOptionalParameter} = require("../../library/utilities");
 const {DesignationUse} = require("../library/designations");
+const {BaseCSServices} = require("./cs-base");
 
 /**
  * UCUM provider context for concepts
@@ -35,7 +36,7 @@ class UcumFilter {
  * UCUM CodeSystem Provider
  * Provides validation and lookup for UCUM unit expressions
  */
-class UcumCodeSystemProvider extends CodeSystemProvider {
+class UcumCodeSystemProvider extends BaseCSServices {
   ucumService;
   commonUnits;
 
