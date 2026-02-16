@@ -236,9 +236,9 @@ describe('Search Worker', () => {
       expect(response.body.link).toBeUndefined();
     });
 
-    test('should return only count with _summary=count on R4 endpoint', async () => {
+    test('should return only count with _summary=count for ValueSet', async () => {
       const response = await request(app)
-        .get('/tx/r4/ValueSet')
+        .get('/tx/r5/ValueSet')
         .query({ _summary: 'count' })
         .set('Accept', 'application/json');
 
@@ -247,6 +247,19 @@ describe('Search Worker', () => {
       expect(response.body.type).toBe('searchset');
       expect(response.body.total).toBeGreaterThan(0);
       expect(response.body.entry).toBeUndefined();
+    });
+
+    test('bundleFromR5 handles bundle without entries', () => {
+      const { bundleFromR5 } = require('../../tx/xversion/xv-bundle');
+      const r5Bundle = {
+        resourceType: 'Bundle',
+        type: 'searchset',
+        total: 42
+      };
+      const r4Bundle = bundleFromR5(r5Bundle, '4.0.1');
+      expect(r4Bundle.resourceType).toBe('Bundle');
+      expect(r4Bundle.total).toBe(42);
+      expect(r4Bundle.entry).toBeUndefined();
     });
 
     test('should return full resources with _summary=false', async () => {
