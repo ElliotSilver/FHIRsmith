@@ -382,12 +382,20 @@ app.get('/', async (req, res) => {
       }
 
       const content = await buildRootPageContent();
-      
+
+      // Load optional about box fragment from data directory
+      let about = '';
+      const aboutPath = path.join(folders.dataDir(), 'about.html');
+      if (fs.existsSync(aboutPath)) {
+        about = fs.readFileSync(aboutPath, 'utf8');
+      }
+
       // Build basic stats for root page
       const stats = {
         version: packageJson.version,
         enabledModules: Object.keys(config.modules).filter(m => config.modules[m].enabled).length,
-        processingTime: Date.now() - startTime
+        processingTime: Date.now() - startTime,
+        about
       };
 
       const html = htmlServer.renderPage('root', escape(config.hostName) || 'FHIRsmith Server', content, stats);
