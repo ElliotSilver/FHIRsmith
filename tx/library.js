@@ -157,8 +157,16 @@ class Library {
 
     this.log.info('Fetching Data from '+this.baseUrl);
 
+    const failedSources = [];
     for (const source of config.sources) {
-      await this.processSource(source, this.packageManager, "fetch");
+      try {
+        await this.processSource(source, this.packageManager, "fetch");
+      } catch (error) {
+        const msg = `Failed to fetch source '${source}': ${error.message}`;
+        console.error(msg);
+        this.log.error(msg);
+        failedSources.push(source);
+      }
     }
 
     this.log.info("Downloaded "+((this.totalDownloaded + this.packageManager.totalDownloaded)/ 1024)+" kB");
@@ -167,13 +175,34 @@ class Library {
     this.#logSystemHeader();
 
     for (const source of config.sources) {
-      await this.processSource(source, this.packageManager, "cs");
+      if (failedSources.includes(source)) continue;
+      try {
+        await this.processSource(source, this.packageManager, "cs");
+      } catch (error) {
+        const msg = `Failed to load code systems from '${source}': ${error.message}`;
+        console.error(msg);
+        this.log.error(msg);
+        failedSources.push(source);
+      }
     }
     this.log.info('Loading Packages');
     this.#logPackagesHeader();
 
     for (const source of config.sources) {
-      await this.processSource(source, this.packageManager, "npm");
+      if (failedSources.includes(source)) continue;
+      try {
+        await this.processSource(source, this.packageManager, "npm");
+      } catch (error) {
+        const msg = `Failed to load package '${source}': ${error.message}`;
+        console.error(msg);
+        this.log.error(msg);
+      }
+    }
+
+    if (failedSources.length > 0) {
+      const msg = `${failedSources.length} source(s) failed to load: ${failedSources.join(', ')}`;
+      console.warn(msg);
+      this.log.warn(msg);
     }
 
     const endMemory = process.memoryUsage();
