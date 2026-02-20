@@ -2230,7 +2230,7 @@ router.get('/:packagePid/:resourceType/:resourceId', async (req, res) => {
       res.status(404).send('Not Found');
     }
   } finally {
-    this.stats.countRequest(':id', Date.now() - start);
+    globalStats.countRequest(':id', Date.now() - start);
   }
 });
 

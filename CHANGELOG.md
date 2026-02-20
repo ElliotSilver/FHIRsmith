@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 FHIRsmith 0.5.1 passed all 1288 HL7 terminology service tests (modes tx.fhir.org,omop,general,snomed, tests v1.9.1-SNAPSHOT, runner v6.8.0)
 
+## [v0.5.2] - 2026-02-20
+
+### Changed
+- Fixed bad count reference in XIG
+
+### Tx Conformance Statement
+
+FHIRsmith 0.5.2 passed all 1288 HL7 terminology service tests (modes tx.fhir.org,omop,general,snomed, tests v1.9.1-SNAPSHOT, runner v6.8.0)
+
 ## [v0.5.0] - 2026-02-19
 
 ### Added
