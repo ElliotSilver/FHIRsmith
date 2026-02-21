@@ -510,15 +510,34 @@ class CodeSystemProvider {
 
   }
   /**
-   * gets a single context in which filters will be evaluated. The application doesn't make use of this context;
-   * it's only use is to be passed back to the CodeSystem provider so it can make use of it - if it wants
+   * gets a single context in which filters will be evaluated. The server doesn't doesn't make use of this context;
+   * it's only use is to be passed back to the CodeSystem provider so it can make use of it to organise the filter process
+   *
+   * The function is passed several pieces of information about the use of the filters that can help it optimise the
+   * behaviour:
+   *   - iterate: whether the value set is being expanded, or instead that membership is just being checked (expand vs validate-code).
+   *       But note, though, that when iterating, only the first filter set (see executeFilters) will be iterated - the rest will
+   *       have filterCheck called
+   *   - excludeInactive: whether to exclude inactive codes from the results. Note that the expand worker will check this anyway,
+   *       so it can be ignored, but it's more efficient to never return inactive codes if they're going to be ignored
+   *   - params: a handle to the parameters passed from the client. The provider doesn't need to do anything because of these
+   *       but it might decide how to optimise loading based on e.g languages, properties, designations, etc. The server will
+   *       reprocess these anyway, so it can be ignored, but again, efficiency
+   *   - offset & count: if the user is paging through the expansion, their offset and count request. Note that if the
+   *       provider does anything with these, it needs to return true from handlesOffset() so the expand worker doesn't try
+   *       to reprocess the offset and count. Note that there is information in the params about offset and count, but
+   *       the provider should ignore these, as it only gets to check offset and count when the conditions are correct
    *
    * @param {boolean} iterate true if the conceptSets that result from this will be iterated, and false if they'll be used to locate a single code
-   * @param {int} offset if handlesOffset() and !iterate, and if the value set is a simple one that only uses this provider, then this is the applicable offset
-   * @param {int} count if handlesOffset() and !iterate, and if the value set is a simple one that only uses this provider, then this is the applicable count
-   * @returns {FilterExecutionContext} filter (or null, it no use for this)
-   * */
-  async getPrepContext(iterate, offset = -1, count = -1) { return new FilterExecutionContext(iterate); }
+   * @param {TxParameters} params: information from the request that the user made, to help optimise loading
+   * @param {boolean} excludeInactive: whether the server will use inactive codes or not
+   * @param {int} offset if handlesOffset() and !iterate, and if the value set is a simple one that only uses this provider, then this is the applicable offset. -1 if not applicable
+   * @param {int} count if handlesOffset() and !iterate, and if the value set is a simple one that only uses this provider, then this is the applicable count. -1 if not applicable
+   * @returns {FilterExecutionContext} filter
+   *
+   **/
+  async getPrepContext(iterate, params, excludeInactive, offset = -1, count = -1) { return new FilterExecutionContext(iterate); }
+
 
   /**
    * executes a text search filter (whatever that means) and returns a FilterConceptSet

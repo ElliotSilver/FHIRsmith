@@ -804,7 +804,9 @@ class ValueSetExpander {
         if (cset.filter) {
           this.worker.opContext.log('prepare filters');
           const fcl = cset.filter;
-          const prep = vsInfo.csDoOffset ? await cs.getPrepContext(true, this.offset, this.count) : await cs.getPrepContext(true);
+          const prep = await cs.getPrepContext(true,
+            this.params, excludeInactive, vsInfo.csDoOffset ? this.offset : -1, cs.handlesOffset() && vsInfo.csDoExcludes ? this.count : -1);
+
           if (!filter.isNull) {
             await cs.searchFilter(filter, prep, true);
           }
