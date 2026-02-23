@@ -4,7 +4,6 @@ const { AbstractValueSetProvider } = require('./vs-api');
 const { ValueSetDatabase } = require('./vs-database');
 const { VersionUtilities } = require('../../library/version-utilities');
 const folders = require('../../library/folder-setup');
-const ValueSet = require("../library/valueset");
 
 /**
  * VSAC (Value Set Authority Center) ValueSet provider

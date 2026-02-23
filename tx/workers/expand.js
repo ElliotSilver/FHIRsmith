@@ -663,7 +663,7 @@ class ValueSetExpander {
     }
   }
 
-  async includeCodes(cset, path, vsSrc, compose, filter, expansion, excludeInactive, notClosed, vsInfo) {
+  async includeCodes(cset, path, vsSrc, compose, filter, expansion, excludeInactive, notClosed) {
     this.worker.deadCheck('processCodes#1');
     const valueSets = [];
 
@@ -1111,7 +1111,7 @@ class ValueSetExpander {
       i = 0;
       for (const c of source.jsonObj.compose.include || []) {
         this.worker.deadCheck('handleCompose#5');
-        await this.includeCodes(c, "ValueSet.compose.include[" + i + "]", source, source.jsonObj.compose, filter, expansion, this.excludeInactives(source), notClosed, vsInfo);
+        await this.includeCodes(c, "ValueSet.compose.include[" + i + "]", source, source.jsonObj.compose, filter, expansion, this.excludeInactives(source), notClosed);
         i++;
       }
     }
