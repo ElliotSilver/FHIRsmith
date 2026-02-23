@@ -30,7 +30,7 @@ class CodeSystemProvider {
    */
   supplements;
 
-  constructor(opContext, supplements) {
+  constructor(opContext, supplements = null) {
     this.opContext = opContext;
     this.supplements = supplements;
     this._ensureOpContext(opContext);
@@ -489,6 +489,39 @@ class CodeSystemProvider {
   // procedure getCDSInfo(card : TCDSHookCard; langList : THTTPLanguageList; baseURL, code, display : String); virtual;
 
   /**
+   * There are two models for handling concepts and filters. The first is where the logic is entirely
+   * handled by worker classes; this is needed for value sets that select codes across systems, and
+   * with references to other value sets. This workflow consists of calling GetPrepContext, followed
+   * by some combination of filter+searchFilter, and then executeFilters
+   *
+   * followed by filterMore/filterConcept. All code system providers have to support this workflow
+   *
+   * But an important subset of value sets simply select codes from one codeSystem, from large
+   * code systems. Such processing can be done much more efficiently by the code system provider.
+   * providers that do this should return handlesSelecting() = true, and then for suitable valuesets,
+   * the method processSelection() will be called
+   */
+  handlesSelecting() {
+    return false;
+  }
+
+  /**
+   * Process a set of includes and excludes for the code system
+   *
+   * @param {TxParameters} params: information from the request that the user made, to help optimise loading
+   * @param {Object[]} includes - a list of includes from the code system. Each include may contain just the system(+version), concepts and/or filters (but won't contain value sets)
+   * @param {Object[]} excludes - a list of excludes from the code system. Each include may contain just the system(+version), concepts and/or filters (but won't contain value sets)
+   * @param {boolean} excludeInactive: whether the server will use inactive codes or not
+   * @param {int} offset if handlesOffset() and !iterate, and if the value set is a simple one that only uses this provider, then this is the applicable offset. -1 if not applicable
+   * @param {int} count if handlesOffset() and !iterate, and if the value set is a simple one that only uses this provider, then this is the applicable count. -1 if not applicable
+   * @returns {FilterConceptSet[]} filter sets. In general, it wouldn't make sense to return more than one, but providers can do if they want to. See futher comments on executeFilters
+   */
+  processSelection(params, includes, excludes, excludeInactive, offset, count) {
+    // well, you only need to override if handlesSelecting=true, but that's the only time this will be called
+    throw new Error("Must override");
+  }
+
+  /**
    * returns true if a filter is supported
    *
    * @param {String} prop
@@ -499,44 +532,14 @@ class CodeSystemProvider {
   async doesFilter(prop, op, value) { return false; }
 
   /**
-   * @return true if the cs provider handles excludes when building filters. If true, and the value set is a clean include+exclude,
-   * the handleExclude will be called between getPrepContext and executeFilters
-   */
-  handlesExcludes() {
-    return false;
-  }
-
-  handlesOffset() {
-
-  }
-  /**
    * gets a single context in which filters will be evaluated. The server doesn't doesn't make use of this context;
    * it's only use is to be passed back to the CodeSystem provider so it can make use of it to organise the filter process
    *
-   * The function is passed several pieces of information about the use of the filters that can help it optimise the
-   * behaviour:
-   *   - iterate: whether the value set is being expanded, or instead that membership is just being checked (expand vs validate-code).
-   *       But note, though, that when iterating, only the first filter set (see executeFilters) will be iterated - the rest will
-   *       have filterCheck called
-   *   - excludeInactive: whether to exclude inactive codes from the results. Note that the expand worker will check this anyway,
-   *       so it can be ignored, but it's more efficient to never return inactive codes if they're going to be ignored
-   *   - params: a handle to the parameters passed from the client. The provider doesn't need to do anything because of these
-   *       but it might decide how to optimise loading based on e.g languages, properties, designations, etc. The server will
-   *       reprocess these anyway, so it can be ignored, but again, efficiency
-   *   - offset & count: if the user is paging through the expansion, their offset and count request. Note that if the
-   *       provider does anything with these, it needs to return true from handlesOffset() so the expand worker doesn't try
-   *       to reprocess the offset and count. Note that there is information in the params about offset and count, but
-   *       the provider should ignore these, as it only gets to check offset and count when the conditions are correct
-   *
    * @param {boolean} iterate true if the conceptSets that result from this will be iterated, and false if they'll be used to locate a single code
-   * @param {TxParameters} params: information from the request that the user made, to help optimise loading
-   * @param {boolean} excludeInactive: whether the server will use inactive codes or not
-   * @param {int} offset if handlesOffset() and !iterate, and if the value set is a simple one that only uses this provider, then this is the applicable offset. -1 if not applicable
-   * @param {int} count if handlesOffset() and !iterate, and if the value set is a simple one that only uses this provider, then this is the applicable count. -1 if not applicable
    * @returns {FilterExecutionContext} filter
    *
    **/
-  async getPrepContext(iterate, params, excludeInactive, offset = -1, count = -1) { return new FilterExecutionContext(iterate); }
+  async getPrepContext(iterate) { return new FilterExecutionContext(iterate); }
 
 
   /**
@@ -548,7 +551,7 @@ class CodeSystemProvider {
    * @param {String} filter user entered text search
    * @param {boolean} sort ?
    **/
-  async searchFilter(filterContext, filter, sort) { throw new Error("Must override"); } // ? must override?
+  async searchFilter(filterContext, filter, sort) { throw new Error("Text Search is not supported"); } // ? must override?
 
   /**
    * Used for searching ucum (see specialEnumeration)
@@ -576,32 +579,13 @@ class CodeSystemProvider {
   async filter(filterContext, prop, op, value) { throw new Error("Must override"); } // well, only if any filters are actually supported
 
   /**
-   * if handlesExcludes(), then inform the CS provider about an applicable set of exclude filters
-   *
-   * this might be called more than once. For each iteration, all of the filters apply
-   *
-   * the objects each have prop, op, and value.
-   *
-   * throws an exception if the search filter can't be handled
-   *
-   * @param {FilterExecutionContext} filterContext filtering context
-   * @param {Object[]} filters
-   **/
-  async filterExcludeFilters(filterContext, filters) { throw new Error("Must override"); } // well, only if any filters are actually supported
-
-  /**
-   * if handlesExcludes(), then inform the CS provider about an applicable set of excluded codes
-   *
-   * @param {FilterExecutionContext} }filterContext - filter context
-   * @param {String[]} code list of codes to exclude
-   */
-  async filterExcludeConcepts(filterContext, code) { throw new Error("Must override"); } // well, only if any filters are actually supported
-
-  /**
    * called once all the filters have been handled, and iteration is about to happen.
    * this function returns one more filters. If there were multiple filters, but only
    * one FilterConceptSet, then the code system provider has done the join across the
    * filters, otherwise the engine will do so as required
+   *
+   * The first in the set of returned FilterConceptSet is used for iterating; other
+   * FilterConceptSets are used for filterCheck();
    *
    * @param {FilterExecutionContext} filterContext filtering context
    * @returns {FilterConceptSet[]} filter sets
@@ -733,7 +717,22 @@ class CodeSystemProvider {
     return null;
   }
 
-
+  /**
+   * a record of observed usages of codes from this code system
+   * - a map of code and object which has count, an integer count
+   * of frequency of use (this server iteration, for now)
+   *
+   * Only populated when expanding, and read-only to the CS Provider
+   *
+   * @type {Map<String, Object>}
+   */
+  usages() {
+    if (this.usagesObj == undefined) {
+      this.usagesObj = this.opContext.usageTracker ? this.opContext.usageTracker.usages(this.system()) : null;
+    }
+    return this.usagesObj;
+  }
+  usagesObj = undefined;
 }
 
 class CodeSystemFactoryProvider {
