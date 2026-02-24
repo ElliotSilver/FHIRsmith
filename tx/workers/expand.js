@@ -20,9 +20,8 @@ const ValueSet = require("../library/valueset");
 const {VersionUtilities} = require("../../library/version-utilities");
 
 // Expansion limits (from Pascal constants)
-const UPPER_LIMIT_NO_TEXT = 1000;
-const UPPER_LIMIT_TEXT = 1000;
-const INTERNAL_LIMIT = 10000;
+const EXTERNAL_DEFAULT_LIMIT = 1000;
+const INTERNAL_DEFAULT_LIMIT = 10000;
 const EXPANSION_DEAD_TIME_SECS = 30;
 const CACHE_WHEN_DEBUGGING = false;
 
@@ -203,10 +202,14 @@ class ValueSetExpander {
   hasExclusions = false;
   requiredSupplements = new Set();
   usedSupplements = new Set();
+  internalLimit = INTERNAL_DEFAULT_LIMIT;
+  externalLimit = EXTERNAL_DEFAULT_LIMIT;
 
   constructor(worker, params) {
     this.worker = worker;
     this.params = params;
+    this.internalLimit = worker.internalLimit;
+    this.externalLimit = worker.externalLimit;
 
     this.csCounter = new Map();
   }
@@ -528,8 +531,10 @@ class ValueSetExpander {
     worker.additionalResources = this.worker.additionalResources;
     // we're going to let this one do more expansion for technical reasons
     let paramsInner = this.params.clone();
-    paramsInner.limit = INTERNAL_LIMIT;
+    paramsInner.limit = this.internalLimit;
     let expander = new ValueSetExpander(worker, paramsInner);
+    expander.internalLimit = this.internalLimit;
+    expander.externalLimit = this.internalLimit; // it's deliberate that this is the internal limit
     let result = await expander.expand(vs, filter, false);
     if (result == null) {
       throw new Issue('error', 'not-found', null, 'VS_EXP_IMPORT_UNK', this.worker.i18n.translate('VS_EXP_IMPORT_UNK', this.params.httpLanguages, [uri]), 'unknown');
@@ -1157,13 +1162,9 @@ class ValueSetExpander {
     this.canBeHierarchy = !this.params.excludeNested;
 
     if (this.params.limit <= 0) {
-      if (!filter.isNull) {
-        this.limitCount = UPPER_LIMIT_TEXT;
-      } else {
-        this.limitCount = UPPER_LIMIT_NO_TEXT;
-      }
+      this.limitCount = this.externalLimit;
     } else {
-      this.limitCount = Math.min(this.params.limit, INTERNAL_LIMIT);
+      this.limitCount = Math.min(this.params.limit, this.externalLimit);
     }
     this.offset = this.params.offset;
     this.count = this.params.count;
@@ -1622,6 +1623,9 @@ class ValueSetExpander {
 }
 
 class ExpandWorker extends TerminologyWorker {
+  internalLimit = INTERNAL_DEFAULT_LIMIT;
+  externalLimit = EXTERNAL_DEFAULT_LIMIT;
+
 
   /**
    * @param {OperationContext} opContext - Operation context
@@ -1630,8 +1634,11 @@ class ExpandWorker extends TerminologyWorker {
    * @param {LanguageDefinitions} languages - Language definitions
    * @param {I18nSupport} i18n - Internationalization support
    */
-  constructor(opContext, log, provider, languages, i18n) {
+  constructor(opContext, log, provider, languages,
+              i18n, internalLimit = INTERNAL_DEFAULT_LIMIT, externalLimit = EXTERNAL_DEFAULT_LIMIT) {
     super(opContext, log, provider, languages, i18n);
+    this.externalLimit = externalLimit;
+    this.internalLimit = internalLimit;
   }
 
   /**
@@ -1894,8 +1901,8 @@ class ExpandWorker extends TerminologyWorker {
 
     if (params.limit < -1) {
       params.limit = -1;
-    } else if (params.limit > UPPER_LIMIT_TEXT) {
-      params.limit = UPPER_LIMIT_TEXT; // can't ask for more than this externally, though you can internally
+    } else if (params.limit > EXTERNAL_DEFAULT_LIMIT) {
+      params.limit = EXTERNAL_DEFAULT_LIMIT; // can't ask for more than this externally, though you can internally
     }
 
     const filter = new SearchFilterText(params.filter);
@@ -1943,9 +1950,8 @@ module.exports = {
   ImportedValueSet,
   ValueSetFilterContext,
   EmptyFilterContext,
+  EXTERNAL_DEFAULT_LIMIT,
+  INTERNAL_DEFAULT_LIMIT,
   TotalStatus,
-  UPPER_LIMIT_NO_TEXT,
-  UPPER_LIMIT_TEXT,
-  INTERNAL_LIMIT,
   EXPANSION_DEAD_TIME_SECS
 };
