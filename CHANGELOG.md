@@ -5,6 +5,18 @@ All notable changes to the Health Intersections Node Server will be documented i
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.2] - 2026-02-24
+
+### Added
+- Page listing logical problems in terminology definitions
+
+### Changed
+- Fixed many bugs identified by usage
+
+### Tx Conformance Statement
+
+FHIRsmith 0.5.1 passed all 1382 HL7 terminology service tests (modes tx.fhir.org,omop,general,snomed, tests v1.9.0, runner v6.8.1)
+
 ## [v0.5.1] - 2026-02-20
 
 ### Added
