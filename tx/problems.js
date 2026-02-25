@@ -71,10 +71,8 @@ class ProblemFinder {
 
   async scanValueSet(compose, versions) {
     for (let inc of compose.include || []) {
-      if (inc.system) {
-        if (inc.version) {
-          this.seeVersion(versions, inc.system, inc.version);
-        }
+      if (inc.system && inc.version) {
+        this.seeVersion(versions, inc.system, inc.version);
       }
     }
   }
