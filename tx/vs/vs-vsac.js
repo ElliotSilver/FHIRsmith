@@ -318,7 +318,19 @@ class VSACValueSetProvider extends AbstractValueSetProvider {
    */
   async _reloadMap() {
     const newMap = await this.database.loadAllValueSets(this.sourcePackage());
-
+    for (const vs of newMap.values()) {
+      if (vs.jsonObj.compose) {
+        for (const inc of vs.jsonObj.compose.include || []) {
+          if (inc.version) {
+            delete inc.version;
+          }
+        }for (const inc of vs.jsonObj.compose.exclude || []) {
+          if (inc.version) {
+            delete inc.version;
+          }
+        }
+      }
+    }
     // Atomic replacement of the map
     this.valueSetMap = newMap;
   }
