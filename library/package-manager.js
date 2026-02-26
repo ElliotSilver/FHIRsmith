@@ -907,7 +907,7 @@ class PackageContentLoader {
     }
 
     id() {
-        return this.package.name;
+        return this.package?.name;
     }
 
     version() {
