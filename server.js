@@ -395,84 +395,32 @@ process.on('uncaughtException', (error) => {
 });
 
 app.get('/', async (req, res) => {
-  // Check if client wants HTML response
-  const acceptsHtml = req.headers.accept && req.headers.accept.includes('text/html');
-
-  if (acceptsHtml) {
-    try {
-      const startTime = Date.now();
-
-      // Load template if not already loaded
-      if (!htmlServer.hasTemplate('root')) {
-        const templatePath = path.join(__dirname, 'root-template.html');
-        htmlServer.loadTemplate('root', templatePath);
-      }
-
-      const content = await buildRootPageContent();
-
-      // Build basic stats for root page
-      const stats = {
-        version: packageJson.version,
-        enabledModules: Object.keys(config.modules).filter(m => config.modules[m].enabled).length,
-        processingTime: Date.now() - startTime
-      };
-
-      const html = htmlServer.renderPage('root', escape(config.hostName) || 'FHIRsmith Server', content, stats);
-      res.setHeader('Content-Type', 'text/html');
-      res.send(html);
-    } catch (error) {
-      serverLog.error('Error rendering root page:', error);
-      htmlServer.sendErrorResponse(res, 'root', error);
+  // If an override index.html exists, serve it instead of the FHIRsmith home page
+  if (config.server?.webBase) {
+    const overrideIndex = path.join(path.resolve(config.server.webBase), 'index.html');
+    if (fs.existsSync(overrideIndex)) {
+      return res.sendFile(overrideIndex);
     }
-  } else {
-    // Return JSON response for API clients
-    const enabledModules = {};
-    Object.keys(config.modules).forEach(moduleName => {
-      if (config.modules[moduleName].enabled) {
-        if (moduleName === 'tx') {
-          // TX module has multiple endpoints
-          enabledModules[moduleName] = {
-            enabled: true,
-            endpoints: config.modules.tx.endpoints.map(e => ({
-              path: e.path,
-              fhirVersion: e.fhirVersion,
-              context: e.context || null
-            }))
-          };
-        } else {
-          enabledModules[moduleName] = {
-            enabled: true,
-            endpoint: moduleName === 'vcl' ? '/VCL' : `/${moduleName}`
-          };
-        }
-      }
-    });
-
-    res.json({
-      message: 'FHIR Development Server',
-      version: '1.0.0',
-      modules: enabledModules,
-      endpoints: {
-        health: '/health',
-        ...Object.fromEntries(
-          Object.keys(enabledModules)
-            .filter(m => m !== 'tx')
-            .map(m => [
-              m,
-              m === 'vcl' ? '/VCL' : `/${m}`
-            ])
-        ),
-        // Add TX endpoints separately
-        ...(enabledModules.tx ? {
-          tx: config.modules.tx.endpoints.map(e => e.path)
-        } : {})
-      }
-    });
   }
+  return serveFhirsmithHome(req, res);
 });
 
+app.get('/fhirsmith', (req, res) => serveFhirsmithHome(req, res));
 
 // Serve static files
+if (config.server?.webBase) {
+  const overrideDir = path.resolve(config.server.webBase);
+  app.use((req, res, next) => {
+    const filePath = path.join(overrideDir, req.path);
+    fs.access(filePath, fs.constants.F_OK, (err) => {
+      if (!err) {
+        res.sendFile(filePath);
+      } else {
+        next();
+      }
+    });
+  });
+}
 app.use(express.static(path.join(__dirname, 'static')));
 
 // Health check endpoint
@@ -609,6 +557,83 @@ process.on('SIGINT', async () => {
   serverLog.info('Server shutdown complete');
   process.exit(0);
 });
+
+async function serveFhirsmithHome(req, res) {
+  // Check if client wants HTML response
+  const acceptsHtml = req.headers.accept && req.headers.accept.includes('text/html');
+
+  if (acceptsHtml) {
+    try {
+      const startTime = Date.now();
+
+      // Load template if not already loaded
+      if (!htmlServer.hasTemplate('root')) {
+        const templatePath = path.join(__dirname, 'root-template.html');
+        htmlServer.loadTemplate('root', templatePath);
+      }
+
+      const content = await buildRootPageContent();
+
+      // Build basic stats for root page
+      const stats = {
+        version: packageJson.version,
+        enabledModules: Object.keys(config.modules).filter(m => config.modules[m].enabled).length,
+        processingTime: Date.now() - startTime
+      };
+
+      const html = htmlServer.renderPage('root', escape(config.hostName) || 'FHIRsmith Server', content, stats);
+      res.setHeader('Content-Type', 'text/html');
+      res.send(html);
+    } catch (error) {
+      serverLog.error('Error rendering root page:', error);
+      htmlServer.sendErrorResponse(res, 'root', error);
+    }
+  } else {
+    // Return JSON response for API clients
+    const enabledModules = {};
+    Object.keys(config.modules).forEach(moduleName => {
+      if (config.modules[moduleName].enabled) {
+        if (moduleName === 'tx') {
+          // TX module has multiple endpoints
+          enabledModules[moduleName] = {
+            enabled: true,
+            endpoints: config.modules.tx.endpoints.map(e => ({
+              path: e.path,
+              fhirVersion: e.fhirVersion,
+              context: e.context || null
+            }))
+          };
+        } else {
+          enabledModules[moduleName] = {
+            enabled: true,
+            endpoint: moduleName === 'vcl' ? '/VCL' : `/${moduleName}`
+          };
+        }
+      }
+    });
+
+    res.json({
+      message: 'FHIR Development Server',
+      version: '1.0.0',
+      modules: enabledModules,
+      endpoints: {
+        health: '/health',
+        ...Object.fromEntries(
+          Object.keys(enabledModules)
+            .filter(m => m !== 'tx')
+            .map(m => [
+              m,
+              m === 'vcl' ? '/VCL' : `/${m}`
+            ])
+        ),
+        // Add TX endpoints separately
+        ...(enabledModules.tx ? {
+          tx: config.modules.tx.endpoints.map(e => e.path)
+        } : {})
+      }
+    });
+  }
+}
 
 // Start the server
 startServer();
