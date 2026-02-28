@@ -22,18 +22,17 @@ class Renderer {
   displayCoded(...args) {
     if (args.length === 1) {
       const arg = args[0];
-      if (arg.systemUri !== undefined && arg.version !== undefined && arg.code !== undefined && arg.display !== undefined) {
+      if (arg instanceof CodeSystemProvider) {
+        return arg.system() + "|" + arg.version();
+      } else  if (arg.system !== undefined && arg.version !== undefined && arg.code !== undefined && arg.display !== undefined) {
         // It's a Coding
         return this.displayCodedCoding(arg);
       } else if (arg.coding !== undefined || arg.text) {
         // It's a CodeableConcept
         return this.displayCodedCodeableConcept(arg);
-      } else if (arg.systemUri !== undefined && arg.version !== undefined) {
+      } else if (arg.system !== undefined && arg.version !== undefined) {
         // It's a CodeSystemProvider
         return this.displayCodedProvider(arg);
-      } else if (arg instanceof CodeSystemProvider) {
-        let cs = arg;
-        return cs.system() + "|" + cs.version();
       }
     } else if (args.length === 2) {
       return this.displayCodedSystemVersion(args[0], args[1]);
@@ -46,7 +45,7 @@ class Renderer {
   }
 
   displayCodedProvider(system) {
-    let result = system.systemUri + '|' + system.version;
+    let result = system.system + '|' + system.version;
     if (system.sourcePackage) {
       result = result + ' (from ' + system.sourcePackage + ')';
     }
@@ -70,7 +69,7 @@ class Renderer {
   }
 
   displayCodedCoding(code) {
-    return this.displayCodedSystemVersionCodeDisplay(code.systemUri, code.version, code.code, code.display);
+    return this.displayCodedSystemVersionCodeDisplay(code.system, code.version, code.code, code.display);
   }
 
   displayCodedCodeableConcept(code) {
@@ -90,12 +89,12 @@ class Renderer {
 
   displayValueSetInclude(inc) {
     let result;
-    if (inc.systemUri) {
-      result = '(' + inc.systemUri + ')';
-      if (inc.hasConcepts) {
+    if (inc.system) {
+      result = '(' + inc.system + ')';
+      if (inc.concept) {
         result = result + '(';
         let first = true;
-        for (const cc of inc.concepts) {
+        for (const cc of inc.concept) {
           if (first) {
             first = false;
           } else {
@@ -105,23 +104,23 @@ class Renderer {
         }
         result = result + ')';
       }
-      if (inc.hasFilters) {
+      if (inc.filter) {
         result = result + '(';
         let first = true;
-        for (const ci of inc.filters) {
+        for (const ci of inc.filter) {
           if (first) {
             first = false;
           } else {
             result = result + ',';
           }
-          result = result + ci.prop + ci.op + ci.value;
+          result = result + ci.property + ci.op + ci.value;
         }
         result = result + ')';
       }
     } else {
       result = '(';
       let first = true;
-      for (const s of inc.valueSets || []) {
+      for (const s of inc.valueSet || []) {
         if (first) {
           first = false;
         } else {
@@ -420,7 +419,7 @@ class Renderer {
         li.tx(this.translate('VALUE_SET_ALL_CODES_DEF')+" ");
         await this.renderLink(li,inc.system+(inc.version ? "|"+inc.version : ""));
       } else if (inc.concept) {
-        li.tx(this.translate('VALUE_SET_THESE_CODES_DEF'));
+        li.tx(this.translate('VALUE_SET_THESE_CODES_DEF')+" ");
         await this.renderLink(li,inc.system+(inc.version ? "|"+inc.version : ""));
         li.tx(":");
         const ul = li.ul();
@@ -897,6 +896,19 @@ class Renderer {
       }
     }
     return count;
+  }
+
+  async renderVSExpansion(vs, showProps) {
+    let div_ = div();
+    let tbl;
+    if (showProps) {
+      div_.h2().tx("Expansion Properties");
+      tbl = div_.table("grid");
+    } else {
+      tbl = div(); // dummy
+    }
+    await this.renderExpansion(div_.table("grid"), vs, tbl);
+    return div_.toString();
   }
 
   async renderExpansion(x, vs, tbl) {
@@ -1556,6 +1568,10 @@ class Renderer {
           } else {
             // No versions specified
             await this.renderLink(li, cs.uri);
+          }
+          let content = cs.content || Extensions.readString(cs, "http://hl7.org/fhir/4.0/StructureDefinition/extension-TerminologyCapabilities.codeSystem.content");
+          if (content && content != "complete") {
+            li.tx(" (" + content + ")");
           }
         }
       }
