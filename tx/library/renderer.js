@@ -438,7 +438,7 @@ class Renderer {
           }
         }
       } else {
-        li.tx(this.translate('VALUE_SET_CODES_FROM'));
+        li.tx(this.translate('VALUE_SET_CODES_FROM')+" ");
         await this.renderLink(li,inc.system+(inc.version ? "|"+inc.version : ""));
         li.tx(" "+ this.translate('VALUE_SET_WHERE')+" ");
         li.startCommaList("and");
