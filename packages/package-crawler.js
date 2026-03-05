@@ -519,7 +519,7 @@ class PackageCrawler {
       const dependencies = [];
       if (packageJson.dependencies) {
         for (const [dep, ver] of Object.entries(packageJson.dependencies)) {
-          dependencies.push(`${dep}@${ver}`);
+          dependencies.push(`${dep}#${ver}`);
         }
       }
 
