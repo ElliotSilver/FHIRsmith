@@ -1469,7 +1469,7 @@ class SnomedExpressionServices {
   /**
    * Validate concept reference
    */
-  checkConcept(concept, limit) {
+  checkConcept(concept, limits) {
     if (concept.code) {
       const conceptId = BigInt(concept.code);
       const result = this.concepts.findConcept(conceptId);
@@ -1480,13 +1480,24 @@ class SnomedExpressionServices {
         throw new Error(`Concept ${concept.code} not found`);
       }
     }
-    if (limit && concept.reference) {
-      // if a limit is specified, then the concept has to be a specialization of that.
-      let parentRef = this.concepts.findConcept(limit);
-      let descendentsRef = this.concepts.getAllDesc(parentRef.index);
-      const descendants = this.refs.getReferences(descendentsRef);
-      if (descendants && !descendants.includes(concept.reference)) {
-        throw new Error(`Concept ${concept.code} is not valid in this context (must be a ${limit})`);
+    if (limits && concept.reference) {
+      // if a limit is specified, then the concept has to be a specialization of one of them.
+      let ok = false;
+      for (const limit of limits) {
+        let parentRef = this.concepts.findConcept(limit);
+        let descendentsRef = this.concepts.getAllDesc(parentRef.index);
+        const descendants = this.refs.getReferences(descendentsRef);
+        if (descendants && descendants.includes(concept.reference)) {
+          ok = true;
+          break;
+        }
+      }
+      if (!ok) {
+        if (limits.length == 1) {
+          throw new Error(`Concept ${concept.code} is not valid in this context (must be a ${limits[0]})`);
+        } else {
+          throw new Error(`Concept ${concept.code} is not valid in this context (must be a descendent of one of ${limits})`);
+        }
       }
     }
 
@@ -1615,7 +1626,7 @@ class SnomedExpressionServices {
    * Validate refinement
    */
   checkRefinement(refinement) {
-    this.checkConcept(refinement.name, '410662002');
+    this.checkConcept(refinement.name, ['410662002', '106237007']);
     this.checkExpression(refinement.value);
   }
 

@@ -1067,13 +1067,13 @@ class PackagesModule {
         const {id, version} = req.params;
 
         if (!id || !version ||
-          !/^[a-zA-Z0-9._-]+$/.test(id) ||
+          !/^(@[a-z0-9._-]+\/)?[a-zA-Z0-9._-]+$/.test(id) ||
           !/^[a-zA-Z0-9._-]+$/.test(version)) {
-          return res.status(400).json({error: 'Invalid package id or version format'});
+          return res.status(400).json({error: `Invalid package id or version format: ${id}`});
         }
 
         if (id.length > 100 || version.length > 50) {
-          return res.status(400).json({error: 'Package id or version too long'});
+          return res.status(400).json({error: `Package id or version too long: ${id}`});
         }
 
         next();
@@ -1517,7 +1517,7 @@ class PackagesModule {
       // Check if we should redirect to bucket storage
       if (this.config.bucketPath) {
         let bucketUrl = this.getBucketUrl(secure);
-        const redirectUrl = `${bucketUrl}${id}-${version}.tgz`;
+        const redirectUrl = `${bucketUrl}${this.fixPrefix(id)}-${version}.tgz`;
         res.redirect(redirectUrl);
         return;
       }
@@ -1888,7 +1888,7 @@ class PackagesModule {
       table += `<td>${escape(this.codeForKind(pv.Kind))}</td>`;
       table += `<td>${new Date(pv.PubDate).toLocaleDateString()}</td>`;
       table += `<td>${(pv.DownloadCount || 0).toLocaleString()}</td>`;
-      table += `<td><a href="/packages/${escape(id)}/${escape(pv.Version)}" class="btn btn-sm btn-primary">Download</a></td>`;
+      table += `<td><a href="/packages/${encodeURIComponent(id)}/${escape(pv.Version)}" class="btn btn-sm btn-primary">Download</a></td>`;
       table += '</tr>';
     }
 
@@ -2126,8 +2126,8 @@ class PackagesModule {
 
     for (const pkg of results) {
       table += '<tr>';
-      table += `<td><a href="${escape(pkg.url)}">${escape(pkg.name)}</a></td>`;
-      table += `<td>${escape(pkg.version)} (<a href="/packages/${escape(pkg.name)}">all</a>)</td>`;
+      table += `<td><a href="${escape(this.fixPrefix(pkg.url))}">${escape(pkg.name)}</a></td>`;
+      table += `<td>${escape(pkg.version)} (<a href="/packages/${encodeURIComponent(pkg.name)}">all</a>)</td>`;
       table += `<td>${escape(pkg.fhirVersion)}</td>`;
       table += `<td>${escape(pkg.kind)}</td>`;
       table += `<td>${pkg.date ? new Date(pkg.date).toLocaleDateString() : 'N/A'}</td>`;
@@ -2817,6 +2817,13 @@ class PackagesModule {
     return content;
   }
 
+  fixPrefix(id) {
+    if (id && id.startsWith("@") && id.includes("/")) {
+      return id.replace("@", "$$").replace("/", "$");
+    } else {
+      return id;
+    }
+  }
 }
 
 module.exports = PackagesModule;

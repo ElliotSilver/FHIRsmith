@@ -12,6 +12,7 @@ const path = require('path');
 
 class PackageCrawler {
   log;
+  packages = new Set();
   
   constructor(config, db, stats) {
     this.config = config;
@@ -26,6 +27,7 @@ class PackageCrawler {
 
   async crawl(log) {
     this.log = log;
+    this.packages.clear();
     
     const startTime = Date.now();
     this.crawlerLog = {
@@ -56,15 +58,30 @@ class PackageCrawler {
           this.log.info('Skipping feed with no URL: '+ feedConfig);
           continue;
         }
-        this.stats.task('Package Crawler', 'Running for '+feedConfig.url);
+        try {
+          let url = this.fixUrl(feedConfig.url)
+          if (!url.includes('simplifier')) {
+            this.stats.task('Package Crawler', 'Running for '+feedConfig.url);
+            await this.updateTheFeed(url, this.config.masterUrl,feedConfig.errors ? feedConfig.errors.replace(/\|/g, '@').replace(/_/g, '.') : '', packageRestrictions);
+          }
+        } catch (feedError) {
+          this.log.error(`Failed to process feed ${feedConfig.url}: `+ feedError.message);
+          // Continue with next feed even if this one fails
+        }
+      }
+      // process simplifier last
+      for (const feedConfig of masterResponse.feeds) {
+        if (!feedConfig.url) {
+          this.log.info('Skipping feed with no URL: '+ feedConfig);
+          continue;
+        }
 
         try {
-          await this.updateTheFeed(
-            this.fixUrl(feedConfig.url),
-            this.config.masterUrl,
-            feedConfig.errors ? feedConfig.errors.replace(/\|/g, '@').replace(/_/g, '.') : '',
-            packageRestrictions
-          );
+          let url = this.fixUrl(feedConfig.url)
+          if (url.includes('simplifier')) {
+            this.stats.task('Package Crawler', 'Running for '+feedConfig.url);
+            await this.updateTheFeed(url, this.config.masterUrl,feedConfig.errors ? feedConfig.errors.replace(/\|/g, '@').replace(/_/g, '.') : '', packageRestrictions);
+          }
         } catch (feedError) {
           this.log.error(`Failed to process feed ${feedConfig.url}: `+ feedError.message);
           // Continue with next feed even if this one fails
@@ -100,14 +117,20 @@ class PackageCrawler {
 
   async fetchJson(url) {
     try {
-      const response = await axios.get(url, {
-        timeout: 30000,
-        headers: {
-          'User-Agent': 'FHIR Package Crawler/1.0'
-        }
-      });
-      return response.data;
+      if (url.startsWith("/")) {
+        const content = await fs.promises.readFile(url, "utf8");
+        return JSON.parse(content);
+      } else {
+        const response = await axios.get(url, {
+          timeout: 30000,
+          headers: {
+            'User-Agent': 'FHIR Package Crawler/1.0'
+          }
+        });
+        return response.data;
+      }
     } catch (error) {
+      console.log(error);
       if (error.response && error.response.status === 429) {
         throw new Error(`RATE_LIMITED: Server returned 429 Too Many Requests for ${url}`);
       }
@@ -117,20 +140,30 @@ class PackageCrawler {
 
   async fetchXml(url) {
     try {
-      const response = await axios.get(url, {
-        timeout: 30000,
-        headers: {
-          'User-Agent': 'FHIR Package Crawler/1.0'
-        }
-      });
+      if (url.startsWith("/")) {
+        const content = await fs.promises.readFile(url, 'utf8');
+        const parser = new XMLParser({
+          ignoreAttributes: false,
+          attributeNamePrefix: '@_',
+          textNodeName: '#text'
+        });
+        return parser.parse(content);
+      } else {
+        const response = await axios.get(url, {
+          timeout: 30000,
+          headers: {
+            'User-Agent': 'FHIR Package Crawler/1.0'
+          }
+        });
 
-      const parser = new XMLParser({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_',
-        textNodeName: '#text'
-      });
+        const parser = new XMLParser({
+          ignoreAttributes: false,
+          attributeNamePrefix: '@_',
+          textNodeName: '#text'
+        });
 
-      return parser.parse(response.data);
+        return parser.parse(response.data);
+      }
     } catch (error) {
       if (error.response && error.response.status === 429) {
         throw new Error(`RATE_LIMITED: Server returned 429 Too Many Requests for ${url}`);
@@ -141,16 +174,22 @@ class PackageCrawler {
 
   async fetchUrl(url) {
     try {
-      const response = await axios.get(url, {
-        timeout: 60000,
-        responseType: 'arraybuffer',
-        headers: {
-          'User-Agent': 'FHIR Package Crawler/1.0'
-        }
-      });
+      if (url.startsWith("/")) {
+        const buffer = await fs.promises.readFile(url);
+        this.totalBytes += buffer.byteLength;
+        return buffer;
+      } else {
+        const response = await axios.get(url, {
+          timeout: 60000,
+          responseType: 'arraybuffer',
+          headers: {
+            'User-Agent': 'FHIR Package Crawler/1.0'
+          }
+        });
 
-      this.totalBytes += response.data.byteLength;
-      return Buffer.from(response.data);
+        this.totalBytes += response.data.byteLength;
+        return Buffer.from(response.data);
+      }
     } catch (error) {
       if (error.response && error.response.status === 429) {
         throw new Error(`RATE_LIMITED: Server returned 429 Too Many Requests for ${url}`);
@@ -166,7 +205,7 @@ class PackageCrawler {
     };
     this.crawlerLog.feeds.push(feedLog);
 
-    this.log.info('Processing feed: '+ url);
+    this.log.info('Processing feed: ' + url);
     const startTime = Date.now();
 
     try {
@@ -195,7 +234,7 @@ class PackageCrawler {
             break; // Stop processing this feed
           }
           // For other errors, log and continue with next item
-          this.log.error(`Error processing item ${i} from ${url}:`+ itemError.message);
+          this.log.error(`Error processing item ${i} from ${url}:` + itemError.message);
         }
       }
 
@@ -205,6 +244,7 @@ class PackageCrawler {
       }
 
     } catch (error) {
+      console.log(error);
       // Check if this is a 429 error on feed fetch
       if (error.message.includes('RATE_LIMITED')) {
         this.log.info(`Rate limited while fetching feed ${url}, skipping this feed`);
@@ -216,7 +256,7 @@ class PackageCrawler {
 
       feedLog.exception = error.message;
       feedLog.failTime = `${Date.now() - startTime}ms`;
-      this.log.error(`Exception processing feed ${url}:`+ error.message);
+      this.log.error(`Exception processing feed ${url}:` + error.message);
 
       // TODO: Send email notification for non-rate-limit errors
       if (email) {
@@ -275,6 +315,12 @@ class PackageCrawler {
         return;
       }
 
+      if (this.packages.has(id)) {
+        this.log.info(`Ignoring package ${id} because it's already been seen in another feed`);
+        return;
+      }
+      this.packages.add(id);
+
       // Check if already processed
       if (await this.hasStored(guid)) {
         itemLog.status = 'Already Processed';
@@ -301,7 +347,7 @@ class PackageCrawler {
       }
 
       itemLog.url = url;
-      this.log.info('Fetching package: '+ url);
+      this.log.info('Fetching package: ' + url);
 
       const packageContent = await this.fetchUrl(url, 'application/tar+gzip');
       await this.store(source, url, guid, pubDate, packageContent, id, itemLog);
@@ -316,6 +362,7 @@ class PackageCrawler {
         throw error;
       }
     }
+
   }
 
   isPackageAllowed(packageId, source, restrictions) {
@@ -416,16 +463,17 @@ class PackageCrawler {
         itemLog.warning = warning;
       }
 
-      // Save to mirror if configured
-      if (this.config.mirrorPath) {
-        const filename = `${id}-${version}.tgz`;
-        const filepath = path.join(this.config.mirrorPath, filename);
-        fs.writeFileSync(filepath, packageBuffer);
-      }
-
       // Validate package data
       if (!this.isValidPackageId(id)) {
         throw new Error(`NPM Id "${id}" is not valid from ${source}`);
+      }
+
+      // Save to mirror if configured
+      if (this.config.mirrorPath) {
+        let fid = this.fixPrefix(id);
+        const filename = `${fid}-${version}.tgz`;
+        const filepath = path.join(this.config.mirrorPath, filename);
+        fs.writeFileSync(filepath, packageBuffer);
       }
 
       if (!this.isValidSemVersion(version)) {
@@ -444,6 +492,7 @@ class PackageCrawler {
       await this.commit(packageBuffer, npmPackage, date, guid, id, version, canonical, urls);
 
     } catch (error) {
+      console.log(error);
       this.log.error(`Error storing package ${guid}:`+ error.message);
       throw error;
     }
@@ -668,7 +717,7 @@ class PackageCrawler {
 
   isValidPackageId(id) {
     // Simple package ID validation
-    return /^[a-z0-9][a-z0-9._-]*$/.test(id);
+    return /^(@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/.test(id);
   }
 
   isValidSemVersion(version) {
@@ -845,6 +894,14 @@ class PackageCrawler {
         }
       });
     });
+  }
+
+  fixPrefix(id) {
+    if (id && id.startsWith("@") && id.includes("/")) {
+      return id.replace("@", "$$").replace("/", "$");
+    } else {
+      return id;
+    }
   }
 }
 

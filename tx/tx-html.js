@@ -290,8 +290,8 @@ class TxHtmlRenderer {
       return await this.buildHomePage(req);
     } else {
       try {
-        const _fmt = req.query._format || req.query.format || req.body?._format;
-        const op = req.path.includes("$");
+        const _fmt = req?.query?._format || req?.query?.format || req?.body?._format;
+        const op = req ? req.path.includes("$") : false;
         const resourceType = json.resourceType;
 
         switch (resourceType) {
