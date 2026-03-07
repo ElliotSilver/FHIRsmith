@@ -12,9 +12,24 @@ const { createOclHttpClient } = require('./http/client');
 const { CACHE_VS_DIR, getCacheFilePath } = require('./cache/cache-paths');
 const { ensureCacheDirectories, getColdCacheAgeMs, formatCacheAgeMinutes } = require('./cache/cache-utils');
 const { computeValueSetExpansionFingerprint } = require('./fingerprint/fingerprint');
-const { ensureTxParametersHashIncludesFilter } = require('./shared/patches');
+const { ensureTxParametersHashIncludesFilter, patchValueSetExpandWholeSystemForOcl } = require('./shared/patches');
 
 ensureTxParametersHashIncludesFilter(TxParameters);
+patchValueSetExpandWholeSystemForOcl();
+
+function normalizeCanonicalSystem(system) {
+  if (typeof system !== 'string') {
+    return system;
+  }
+
+  const trimmed = system.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  // Treat canonical URLs with and without trailing slash as equivalent.
+  return trimmed.replace(/\/+$/, '');
+}
 
 class OCLValueSetProvider extends AbstractValueSetProvider {
   constructor(config = {}) {
@@ -379,7 +394,7 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
       return null;
     }
 
-    const preferredSource = collection.preferred_source || collection.preferredSource || null;
+    const preferredSource = normalizeCanonicalSystem(collection.preferred_source || collection.preferredSource || null);
     const json = {
       resourceType: 'ValueSet',
       id,
@@ -509,14 +524,8 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
     if (!vs || !vs.jsonObj) {
       return;
     }
-    if (vs.jsonObj.compose && Array.isArray(vs.jsonObj.compose.include) && vs.jsonObj.compose.include.length > 0) {
-      return;
-    }
 
     const meta = this.#getCollectionMeta(vs);
-    if (!meta || !meta.conceptsUrl) {
-      return;
-    }
 
     const composeKey = vs.id || vs.url;
     if (this._composePromises.has(composeKey)) {
@@ -525,17 +534,32 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
     }
 
     const promise = (async () => {
-      const sources = await this.#fetchCollectionSources(meta);
-      if (!sources || sources.length === 0) {
-        return;
+      const existingInclude = Array.isArray(vs?.jsonObj?.compose?.include)
+        ? vs.jsonObj.compose.include
+        : [];
+
+      // Always normalize existing compose entries first because discovery metadata
+      // can carry non-canonical preferred_source values.
+      const include = this.#normalizeComposeIncludes(existingInclude);
+
+      // Reconcile with collection-resolved sources whenever available so $expand
+      // and direct CodeSystem lookups share the same canonical registry keys.
+      if (meta && (meta.conceptsUrl || meta.expansionUrl)) {
+        const sources = await this.#fetchCollectionSources(meta);
+        if (Array.isArray(sources) && sources.length > 0) {
+          include.push(...this.#normalizeComposeIncludes(sources));
+        }
       }
 
-      vs.jsonObj.compose = {
-        include: sources.map(source => ({
-          system: source.system,
-          version: source.version || undefined
-        }))
-      };
+      // Preferred source is a fallback only when no resolvable include was found.
+      if (include.length === 0 && meta?.preferredSource) {
+        include.push(...this.#normalizeComposeIncludes([{ system: meta.preferredSource }]));
+      }
+
+      const deduped = this.#dedupeComposeIncludes(include);
+      if (deduped.length > 0) {
+        vs.jsonObj.compose = { include: deduped };
+      }
     })();
 
     this._composePromises.set(composeKey, promise);
@@ -544,6 +568,67 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
     } finally {
       this._composePromises.delete(composeKey);
     }
+  }
+
+  #normalizeComposeIncludes(includeEntries) {
+    if (!Array.isArray(includeEntries) || includeEntries.length === 0) {
+      return [];
+    }
+
+    const normalized = [];
+    for (const entry of includeEntries) {
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+
+      const system = normalizeCanonicalSystem(entry.system);
+      if (!system) {
+        continue;
+      }
+
+      let version = entry.version || null;
+      const hasAnyFactory = OCLSourceCodeSystemFactory.hasFactory(system, null);
+      const hasExactFactory = OCLSourceCodeSystemFactory.hasExactFactory(system, version);
+
+      // If include.version does not match the registered OCL factory key,
+      // omit it so Provider lookup can reuse the already loaded canonical factory.
+      if (version && hasAnyFactory && !hasExactFactory) {
+        version = null;
+      }
+
+      normalized.push({
+        system,
+        version: version || undefined
+      });
+    }
+
+    return normalized;
+  }
+
+  #dedupeComposeIncludes(includeEntries) {
+    const deduped = [];
+    const seen = new Set();
+
+    for (const include of includeEntries || []) {
+      const system = normalizeCanonicalSystem(include?.system);
+      if (!system) {
+        continue;
+      }
+
+      const version = include?.version || '';
+      const key = `${system}|${version}`;
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      deduped.push({
+        system,
+        version: version || undefined
+      });
+    }
+
+    return deduped;
   }
 
   async #fetchCollectionSources(meta) {
@@ -572,7 +657,7 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
           const shortCode = entry.short_code || entry.shortCode || entry.id || null;
           const version = entry.version || null;
 
-          const systemUrl = system || (owner && shortCode ? await this.#getSourceCanonicalUrl(owner, shortCode) : null);
+          const systemUrl = normalizeCanonicalSystem(system || (owner && shortCode ? await this.#getSourceCanonicalUrl(owner, shortCode) : null));
           if (systemUrl && !seen.has(systemUrl)) {
             seen.add(systemUrl);
             sources.push({ system: systemUrl, version });
@@ -593,7 +678,7 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
 
     const sourceKeys = await this.#fetchCollectionSourceKeys(meta.conceptsUrl, meta.owner || null);
     for (const { owner, source } of sourceKeys) {
-      const systemUrl = await this.#getSourceCanonicalUrl(owner, source);
+      const systemUrl = normalizeCanonicalSystem(await this.#getSourceCanonicalUrl(owner, source));
       if (systemUrl && !seen.has(systemUrl)) {
         seen.add(systemUrl);
         sources.push({ system: systemUrl });
@@ -601,7 +686,10 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
     }
 
     if (sources.length === 0 && meta.preferredSource) {
-      sources.push({ system: meta.preferredSource });
+      const preferredSource = normalizeCanonicalSystem(meta.preferredSource);
+      if (preferredSource) {
+        sources.push({ system: preferredSource });
+      }
     }
 
       this.collectionSourcesCache.set(sourcesCacheKey, sources);
@@ -1147,7 +1235,7 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
     const include = Array.isArray(vs?.jsonObj?.compose?.include) ? vs.jsonObj.compose.include : [];
     const checksums = {};
     for (const item of include) {
-      const system = item?.system || null;
+      const system = normalizeCanonicalSystem(item?.system || null);
       if (!system) {
         continue;
       }

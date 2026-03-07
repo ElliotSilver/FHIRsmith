@@ -16,6 +16,20 @@ const { patchSearchWorkerForOCLCodeFiltering } = require('./shared/patches');
 
 patchSearchWorkerForOCLCodeFiltering();
 
+function normalizeCanonicalSystem(system) {
+  if (typeof system !== 'string') {
+    return system;
+  }
+
+  const trimmed = system.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  // Treat canonical URLs with and without trailing slash as equivalent.
+  return trimmed.replace(/\/+$/, '');
+}
+
 class OCLCodeSystemProvider extends AbstractCodeSystemProvider {
   constructor(config = {}) {
     super();
@@ -230,7 +244,7 @@ class OCLCodeSystemProvider extends AbstractCodeSystemProvider {
     }
 
     const owner = source.owner || '';
-    const canonical = source.canonical_url || source.canonicalUrl || '';
+    const canonical = normalizeCanonicalSystem(source.canonical_url || source.canonicalUrl || '');
     const shortCode = source.short_code || source.shortCode || source.id || source.mnemonic || source.name || '';
     return `${owner}|${canonical}|${shortCode}`;
   }
@@ -332,7 +346,7 @@ class OCLCodeSystemProvider extends AbstractCodeSystemProvider {
       return null;
     }
 
-    const canonicalUrl = source.canonical_url || source.canonicalUrl || source.url;
+    const canonicalUrl = normalizeCanonicalSystem(source.canonical_url || source.canonicalUrl || source.url);
     if (!canonicalUrl) {
       return null;
     }
@@ -585,7 +599,20 @@ class OCLSourceCodeSystemProvider extends CodeSystemProvider {
   }
 
   contentMode() {
-    return this.isSystemComplete() ? CodeSystemContentMode.Complete : CodeSystemContentMode.NotPresent;
+    if (this.isSystemComplete()) {
+      return CodeSystemContentMode.Complete;
+    }
+
+    // OCL CodeSystems are lazily materialized. Even when metadata is still
+    // warming up, concepts remain fetchable through the source concepts URL.
+    // Report at least fragment support so $expand does not fail early with
+    // "has no content" before lazy retrieval/hydration can run.
+    const hasRealCodeSystemResource = this.meta?.codeSystem instanceof CodeSystem;
+    if (hasRealCodeSystemResource && (this.meta?.conceptsUrl || this.conceptCache.size > 0 || this.pageCache.size > 0)) {
+      return CodeSystemContentMode.Fragment;
+    }
+
+    return CodeSystemContentMode.NotPresent;
   }
 
   totalCount() {
@@ -1152,13 +1179,64 @@ class OCLSourceCodeSystemProvider extends CodeSystemProvider {
 class OCLSourceCodeSystemFactory extends CodeSystemFactoryProvider {
   static factoriesByKey = new Map();
 
+  static #normalizeSystem(system) {
+    return normalizeCanonicalSystem(system);
+  }
+
+  static hasFactory(system, version = null) {
+    return !!OCLSourceCodeSystemFactory.#findFactory(system, version);
+  }
+
+  static hasExactFactory(system, version = null) {
+    const normalizedSystem = OCLSourceCodeSystemFactory.#normalizeSystem(system);
+    if (!normalizedSystem) {
+      return false;
+    }
+
+    const exactKey = `${normalizedSystem}|${version || ''}`;
+    return OCLSourceCodeSystemFactory.factoriesByKey.has(exactKey);
+  }
+
+  static #findFactory(system, version = null) {
+    const normalizedSystem = OCLSourceCodeSystemFactory.#normalizeSystem(system);
+    if (!normalizedSystem) {
+      return null;
+    }
+
+    const exactKey = `${normalizedSystem}|${version || ''}`;
+    const exact = OCLSourceCodeSystemFactory.factoriesByKey.get(exactKey);
+    if (exact) {
+      return exact;
+    }
+
+    // When caller version does not match the registered one (or is absent),
+    // still reuse the factory for the same canonical system.
+    for (const [key, factory] of OCLSourceCodeSystemFactory.factoriesByKey.entries()) {
+      if (!factory) {
+        continue;
+      }
+
+      const separatorIndex = key.lastIndexOf('|');
+      if (separatorIndex < 0) {
+        continue;
+      }
+
+      const keySystem = OCLSourceCodeSystemFactory.#normalizeSystem(key.substring(0, separatorIndex));
+      if (keySystem === normalizedSystem) {
+        return factory;
+      }
+    }
+
+    return null;
+  }
+
   static syncCodeSystemResource(system, version = null, codeSystem = null) {
-    if (!system) {
+    const normalizedSystem = OCLSourceCodeSystemFactory.#normalizeSystem(system);
+    if (!normalizedSystem) {
       return;
     }
 
-    const key = `${system}|${version || ''}`;
-    const factory = OCLSourceCodeSystemFactory.factoriesByKey.get(key);
+    const factory = OCLSourceCodeSystemFactory.#findFactory(normalizedSystem, version);
     if (!factory) {
       return;
     }
@@ -1182,6 +1260,11 @@ class OCLSourceCodeSystemFactory extends CodeSystemFactoryProvider {
     this.materializedConceptList = null;
     this.materializedConceptCount = -1;
     OCLSourceCodeSystemFactory.factoriesByKey.set(this.#resourceKey(), this);
+
+    const unversionedKey = `${this.system()}|`;
+    if (!OCLSourceCodeSystemFactory.factoriesByKey.has(unversionedKey)) {
+      OCLSourceCodeSystemFactory.factoriesByKey.set(unversionedKey, this);
+    }
     
     // Load cold cache at construction
     this.#loadColdCache();
@@ -1254,8 +1337,9 @@ class OCLSourceCodeSystemFactory extends CodeSystemFactoryProvider {
   }
 
   static scheduleBackgroundLoadByKey(system, version = null, reason = 'valueset-expansion') {
-    const key = `${system}|${version || ''}`;
-    const factory = OCLSourceCodeSystemFactory.factoriesByKey.get(key);
+    const normalizedSystem = OCLSourceCodeSystemFactory.#normalizeSystem(system);
+    const key = `${normalizedSystem}|${version || ''}`;
+    const factory = OCLSourceCodeSystemFactory.#findFactory(normalizedSystem, version);
     if (!factory) {
       console.log(`[OCL] CodeSystem load not scheduled (factory unavailable): ${key}`);
       return false;
@@ -1265,8 +1349,8 @@ class OCLSourceCodeSystemFactory extends CodeSystemFactoryProvider {
   }
 
   static checksumForResource(system, version = null) {
-    const key = `${system}|${version || ''}`;
-    const factory = OCLSourceCodeSystemFactory.factoriesByKey.get(key);
+    const normalizedSystem = OCLSourceCodeSystemFactory.#normalizeSystem(system);
+    const factory = OCLSourceCodeSystemFactory.#findFactory(normalizedSystem, version);
     if (!factory) {
       return null;
     }
@@ -1634,7 +1718,8 @@ class OCLSourceCodeSystemFactory extends CodeSystemFactoryProvider {
   }
 
   #resourceKey() {
-    return `${this.system()}|${this.version() || ''}`;
+    const normalizedSystem = OCLSourceCodeSystemFactory.#normalizeSystem(this.system());
+    return `${normalizedSystem}|${this.version() || ''}`;
   }
 
   currentChecksum() {
@@ -1652,7 +1737,7 @@ class OCLSourceCodeSystemFactory extends CodeSystemFactoryProvider {
   }
 
   system() {
-    return this.meta.canonicalUrl;
+    return normalizeCanonicalSystem(this.meta.canonicalUrl);
   }
 
   name() {

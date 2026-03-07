@@ -7,6 +7,8 @@ const { OCLValueSetProvider } = require('../../tx/ocl/vs-ocl');
 const { OCLSourceCodeSystemFactory, OCLBackgroundJobQueue } = require('../../tx/ocl/cs-ocl');
 const { CACHE_VS_DIR, getCacheFilePath } = require('../../tx/ocl/cache/cache-paths');
 const { COLD_CACHE_FRESHNESS_MS } = require('../../tx/ocl/shared/constants');
+const { ValueSetExpander } = require('../../tx/workers/expand');
+const { patchValueSetExpandWholeSystemForOcl } = require('../../tx/ocl/shared/patches');
 
 function resetQueueState() {
   OCLBackgroundJobQueue.pendingJobs = [];
@@ -59,6 +61,16 @@ describe('OCL ValueSet integration', () => {
             preferred_source: 'http://example.org/cs/source-one',
             concepts_url: conceptsPath,
             expansion_url: expansionPath
+          }
+        ]
+      })
+      .get(expansionPath)
+      .times(20)
+      .reply(200, {
+        resolved_source_versions: [
+          {
+            canonical_url: 'http://example.org/cs/source-one',
+            version: '1.0.0'
           }
         ]
       });
@@ -136,7 +148,7 @@ describe('OCL ValueSet integration', () => {
       .times(2)
       .reply(200, { results: [{ code: 'A' }] }, { num_found: '3' })
       .get(conceptsPath)
-      .query(q => Number(q.page) === 1 && Number(q.limit) === 1000 && String(q.verbose) === 'true')
+      .query(q => Number(q.page) === 1 && Number(q.limit) === 1000)
       .reply(200, {
         results: [
           {
@@ -162,7 +174,7 @@ describe('OCL ValueSet integration', () => {
         ]
       })
       .get(conceptsPath)
-      .query(q => Number(q.page) === 2 && Number(q.limit) === 1000 && String(q.verbose) === 'true')
+      .query(q => Number(q.page) === 2 && Number(q.limit) === 1000)
       .reply(200, { results: [] });
 
     const provider = new OCLValueSetProvider({ baseUrl, org: 'org-a' });
@@ -285,5 +297,139 @@ describe('OCL ValueSet integration', () => {
 
     const all = await provider.listAllValueSets();
     expect(all).toContain('http://example.org/vs/one');
+  });
+
+  test('regression: unfiltered whole-system include retries with bounded paging for OCL', async () => {
+    patchValueSetExpandWholeSystemForOcl();
+
+    const cs = {
+      specialEnumeration: () => null,
+      isNotClosed: () => false,
+      iterator: async () => ({ total: 5001 }),
+      nextContext: (() => {
+        let emitted = false;
+        return async () => {
+          if (emitted) {
+            return null;
+          }
+          emitted = true;
+          return { code: 'A' };
+        };
+      })(),
+      system: async () => 'http://example.org/cs/source-one',
+      version: async () => '1.0.0'
+    };
+
+    const expander = new ValueSetExpander({
+      internalLimit: 10000,
+      externalLimit: 1000,
+      opContext: { log: () => {}, diagnostics: () => '' },
+      deadCheck: () => {},
+      findCodeSystem: async () => cs,
+      checkSupplements: () => {},
+      i18n: { languageDefinitions: {}, translate: (_k, _langs, args) => `too costly ${args?.join(' ') || ''}` },
+      provider: { getFhirVersion: () => '5.0.0' },
+      languages: { parse: () => null }
+    }, {
+      hasDesignations: false,
+      designations: [],
+      httpLanguages: null
+    });
+
+    expander.valueSet = { oclFetchConcepts: async () => ({ contains: [] }) };
+    expander.limitCount = 1000;
+    expander.count = -1;
+    expander.offset = -1;
+    expander.hasExclusions = false;
+    expander.requiredSupplements = new Set();
+    expander.usedSupplements = new Set();
+    expander.map = new Map();
+    expander.fullList = [];
+    expander.rootList = [];
+    expander.addToTotal = jest.fn();
+    expander.passesFilters = jest.fn(async () => true);
+    expander.includeCodeAndDescendants = jest.fn(async () => 1);
+    expander.checkProviderCanonicalStatus = jest.fn();
+    expander.addParamUri = jest.fn();
+    expander.addParamInt = jest.fn();
+
+    await expect(expander.includeCodes(
+      { system: 'http://example.org/cs/source-one' },
+      'ValueSet.compose.include[0]',
+      { vurl: 'http://example.org/vs/one|1.0.0', url: 'http://example.org/vs/one' },
+      { include: [{ system: 'http://example.org/cs/source-one' }] },
+      { isNull: true },
+      {},
+      false,
+      { value: false }
+    )).resolves.toBeUndefined();
+
+    expect(expander.addParamInt).toHaveBeenCalledWith(expect.any(Object), 'offset', 0);
+    expect(expander.addParamInt).toHaveBeenCalledWith(expect.any(Object), 'count', 1000);
+    expect(expander.includeCodeAndDescendants).toHaveBeenCalled();
+  });
+
+  test('filtered whole-system include keeps default too-costly behavior', async () => {
+    patchValueSetExpandWholeSystemForOcl();
+
+    const cs = {
+      specialEnumeration: () => null,
+      isNotClosed: () => false,
+      iterator: async () => ({ total: 5001 }),
+      nextContext: async () => null,
+      system: async () => 'http://example.org/cs/source-one',
+      version: async () => '1.0.0'
+    };
+
+    const expander = new ValueSetExpander({
+      internalLimit: 10000,
+      externalLimit: 1000,
+      opContext: { log: () => {}, diagnostics: () => '' },
+      deadCheck: () => {},
+      findCodeSystem: async () => cs,
+      checkSupplements: () => {},
+      i18n: { languageDefinitions: {}, translate: (_k, _langs, args) => `too costly ${args?.join(' ') || ''}` },
+      provider: { getFhirVersion: () => '5.0.0' },
+      languages: { parse: () => null }
+    }, {
+      hasDesignations: false,
+      designations: [],
+      httpLanguages: null
+    });
+
+    expander.valueSet = {};
+    expander.limitCount = 1000;
+    expander.count = -1;
+    expander.offset = -1;
+    expander.hasExclusions = false;
+    expander.requiredSupplements = new Set();
+    expander.usedSupplements = new Set();
+    expander.map = new Map();
+    expander.fullList = [];
+    expander.rootList = [];
+    expander.passesFilters = jest.fn(async () => true);
+    expander.includeCodeAndDescendants = jest.fn(async () => 1);
+    expander.checkProviderCanonicalStatus = jest.fn();
+    expander.addParamUri = jest.fn();
+    expander.addParamInt = jest.fn();
+
+    let thrown = null;
+    try {
+      await expander.includeCodes(
+        { system: 'http://example.org/cs/source-one' },
+        'ValueSet.compose.include[0]',
+        { vurl: 'http://example.org/vs/one|1.0.0', url: 'http://example.org/vs/one' },
+        { include: [{ system: 'http://example.org/cs/source-one' }] },
+        { isNull: true },
+        {},
+        false,
+        { value: false }
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeTruthy();
+    expect(thrown.cause).toBe('too-costly');
   });
 });
