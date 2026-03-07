@@ -1393,12 +1393,22 @@ class OCLSourceCodeSystemFactory extends CodeSystemFactoryProvider {
 
   scheduleBackgroundLoad(reason = 'request') {
     this.#syncWarmStateWithChecksum();
-    if (this.isComplete) {
-      return;
-    }
-
     const cacheFilePath = getCacheFilePath(CACHE_CS_DIR, this.system(), this.version());
     const cacheAgeMs = getColdCacheAgeMs(cacheFilePath);
+
+    // If warm state is complete but cold cache is stale, force a refresh run.
+    // This keeps warm data available while ensuring stale cold-cache files are replaced.
+    if (this.isComplete) {
+      if (cacheAgeMs == null || cacheAgeMs < COLD_CACHE_FRESHNESS_MS) {
+        return;
+      }
+
+      this.isComplete = false;
+      if (this.meta?.codeSystem?.jsonObj?.content === CodeSystemContentMode.Complete) {
+        this.meta.codeSystem.jsonObj.content = CodeSystemContentMode.Fragment;
+      }
+    }
+
     if (cacheAgeMs != null && cacheAgeMs < COLD_CACHE_FRESHNESS_MS) {
       console.log(`[OCL] Skipping warm-up for CodeSystem ${this.system()} (cold cache age: ${formatCacheAgeMinutes(cacheAgeMs)})`);
       return;
