@@ -1,468 +1,30 @@
-const axios = require('axios');
 const fs = require('fs/promises');
-const fsSync = require('fs');
-const crypto = require('crypto');
-const path = require('path');
 const { AbstractCodeSystemProvider } = require('../cs/cs-provider-api');
 const { CodeSystemProvider, CodeSystemFactoryProvider, CodeSystemContentMode, FilterExecutionContext } = require('../cs/cs-api');
 const { CodeSystem } = require('../library/codesystem');
 const { SearchFilterText } = require('../library/designations');
-
-const DEFAULT_BASE_URL = 'https://oclapi2.ips.hsl.org.br';
-const PAGE_SIZE = 100;
-const CONCEPT_PAGE_SIZE = 1000;
-const COLD_CACHE_FRESHNESS_MS = 60 * 60 * 1000;
-const OCL_CODESYSTEM_MARKER_EXTENSION = 'http://fhir.org/FHIRsmith/StructureDefinition/ocl-codesystem';
-const OCL_SEARCH_PATCH_FLAG = Symbol.for('fhirsmith.ocl.search.codesystem.code.patch');
-
-function hasOCLCodeSystemMarker(resource) {
-  const extensions = Array.isArray(resource?.extension) ? resource.extension : [];
-  return extensions.some(ext => ext && ext.url === OCL_CODESYSTEM_MARKER_EXTENSION);
-}
-
-function filterConceptTreeByCode(concepts, wantedCode) {
-  if (!Array.isArray(concepts) || concepts.length === 0) {
-    return [];
-  }
-
-  const matches = [];
-  for (const concept of concepts) {
-    if (!concept || typeof concept !== 'object') {
-      continue;
-    }
-
-    const childMatches = filterConceptTreeByCode(concept.concept, wantedCode);
-    const isSelfMatch = concept.code != null && String(concept.code) === wantedCode;
-    if (!isSelfMatch && childMatches.length === 0) {
-      continue;
-    }
-
-    const clone = { ...concept };
-    if (childMatches.length > 0) {
-      clone.concept = childMatches;
-    } else {
-      delete clone.concept;
-    }
-    matches.push(clone);
-  }
-
-  return matches;
-}
-
-function filterOCLCodeSystemResourceByCode(resource, code) {
-  if (!resource || typeof resource !== 'object') {
-    return resource;
-  }
-
-  const filteredConcepts = filterConceptTreeByCode(resource.concept, code);
-  return {
-    ...resource,
-    concept: filteredConcepts
-  };
-}
-
-function patchSearchWorkerForOCLCodeFiltering() {
-  let SearchWorker;
-  try {
-    SearchWorker = require('../workers/search');
-  } catch (_error) {
-    return;
-  }
-
-  if (!SearchWorker || !SearchWorker.prototype) {
-    return;
-  }
-
-  const proto = SearchWorker.prototype;
-  if (proto[OCL_SEARCH_PATCH_FLAG] === true || typeof proto.searchCodeSystems !== 'function') {
-    return;
-  }
-
-  const originalSearchCodeSystems = proto.searchCodeSystems;
-  proto.searchCodeSystems = function patchedSearchCodeSystems(params) {
-    const matches = originalSearchCodeSystems.call(this, params);
-    const requestedCode = params?.code == null ? '' : String(params.code);
-
-    if (!requestedCode) {
-      return matches;
-    }
-
-    const filtered = [];
-    for (const resource of matches) {
-      if (!hasOCLCodeSystemMarker(resource)) {
-        filtered.push(resource);
-        continue;
-      }
-
-      const projected = filterOCLCodeSystemResourceByCode(resource, requestedCode);
-      if (Array.isArray(projected?.concept) && projected.concept.length > 0) {
-        filtered.push(projected);
-      }
-    }
-
-    return filtered;
-  };
-
-  Object.defineProperty(proto, OCL_SEARCH_PATCH_FLAG, {
-    value: true,
-    writable: false,
-    configurable: false,
-    enumerable: false
-  });
-}
+const { PAGE_SIZE, CONCEPT_PAGE_SIZE, COLD_CACHE_FRESHNESS_MS, OCL_CODESYSTEM_MARKER_EXTENSION } = require('./shared/constants');
+const { createOclHttpClient } = require('./http/client');
+const { fetchAllPages, extractItemsAndNext } = require('./http/pagination');
+const { CACHE_CS_DIR, CACHE_VS_DIR, getCacheFilePath } = require('./cache/cache-paths');
+const { ensureCacheDirectories, getColdCacheAgeMs, formatCacheAgeMinutes } = require('./cache/cache-utils');
+const { computeCodeSystemFingerprint } = require('./fingerprint/fingerprint');
+const { OCLBackgroundJobQueue } = require('./jobs/background-queue');
+const { OCLConceptFilterContext } = require('./model/concept-filter-context');
+const { toConceptContext } = require('./mappers/concept-mapper');
+const { patchSearchWorkerForOCLCodeFiltering } = require('./shared/patches');
 
 patchSearchWorkerForOCLCodeFiltering();
-
-// Cold cache configuration
-const CACHE_BASE_DIR = path.join(process.cwd(), 'data', 'terminology-cache', 'ocl');
-const CACHE_CS_DIR = path.join(CACHE_BASE_DIR, 'codesystems');
-const CACHE_VS_DIR = path.join(CACHE_BASE_DIR, 'valuesets');
-
-// Cache file utilities
-async function ensureCacheDirectories() {
-  try {
-    await fs.mkdir(CACHE_CS_DIR, { recursive: true });
-    await fs.mkdir(CACHE_VS_DIR, { recursive: true });
-  } catch (error) {
-    console.error('[OCL] Failed to create cache directories:', error.message);
-  }
-}
-
-// CodeSystem fingerprint computation
-function computeCodeSystemFingerprint(concepts) {
-  if (!Array.isArray(concepts) || concepts.length === 0) {
-    return null;
-  }
-
-  // Normalize concepts to deterministic strings
-  const normalized = concepts
-    .map(concept => {
-      if (!concept || !concept.code) {
-        return null;
-      }
-      const code = String(concept.code || '');
-      const display = String(concept.display || '');
-      const definition = String(concept.definition || '');
-      const retired = concept.retired === true ? '1' : '0';
-      return `${code}|${display}|${definition}|${retired}`;
-    })
-    .filter(Boolean)
-    .sort();
-
-  // Compute SHA256 hash
-  const hash = crypto.createHash('sha256');
-  for (const item of normalized) {
-    hash.update(item);
-    hash.update('\n');
-  }
-  return hash.digest('hex');
-}
-
-function sanitizeFilename(text) {
-  if (!text || typeof text !== 'string') {
-    return 'unknown';
-  }
-  return text
-    .replace(/[^a-zA-Z0-9._-]/g, '_')
-    .replace(/_+/g, '_')
-    .substring(0, 200);
-}
-
-function getCacheFilePath(baseDir, canonicalUrl, version = null) {
-  const filename = sanitizeFilename(canonicalUrl) + (version ? `_${sanitizeFilename(version)}` : '') + '.json';
-  return path.join(baseDir, filename);
-}
-
-function getColdCacheAgeMs(cacheFilePath) {
-  try {
-    const stats = fsSync.statSync(cacheFilePath);
-    if (!stats || !Number.isFinite(stats.mtimeMs)) {
-      return null;
-    }
-    return Math.max(0, Date.now() - stats.mtimeMs);
-  } catch (error) {
-    if (error && error.code !== 'ENOENT') {
-      console.error(`[OCL] Failed to inspect cold cache file ${cacheFilePath}: ${error.message}`);
-    }
-    return null;
-  }
-}
-
-function formatCacheAgeMinutes(ageMs) {
-  const minutes = Math.max(1, Math.round(ageMs / 60000));
-  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-}
-
-class OCLConceptFilterContext {
-  constructor() {
-    this.concepts = [];
-    this.currentIndex = -1;
-  }
-
-  add(concept, rating = 0) {
-    this.concepts.push({ concept, rating });
-  }
-
-  sort() {
-    this.concepts.sort((a, b) => b.rating - a.rating);
-  }
-
-  size() {
-    return this.concepts.length;
-  }
-
-  hasMore() {
-    return this.currentIndex + 1 < this.concepts.length;
-  }
-
-  next() {
-    if (!this.hasMore()) {
-      return null;
-    }
-    this.currentIndex += 1;
-    return this.concepts[this.currentIndex].concept;
-  }
-
-  reset() {
-    this.currentIndex = -1;
-  }
-
-  findConceptByCode(code) {
-    for (const item of this.concepts) {
-      if (item.concept && item.concept.code === code) {
-        return item.concept;
-      }
-    }
-    return null;
-  }
-
-  containsConcept(concept) {
-    return this.concepts.some(item => item.concept === concept);
-  }
-}
-
-class OCLBackgroundJobQueue {
-  static MAX_CONCURRENT = 2;
-  static HEARTBEAT_INTERVAL_MS = 30000;
-  static UNKNOWN_JOB_SIZE = Number.MAX_SAFE_INTEGER;
-  static pendingJobs = [];
-  static activeCount = 0;
-  static queuedOrRunningKeys = new Set();
-  static activeJobs = new Map();
-  static heartbeatTimer = null;
-  static enqueueSequence = 0;
-
-  static enqueue(jobKey, jobType, runJob, options = {}) {
-    if (!jobKey || typeof runJob !== 'function') {
-      return false;
-    }
-
-    if (this.queuedOrRunningKeys.has(jobKey)) {
-      return false;
-    }
-
-    this.queuedOrRunningKeys.add(jobKey);
-    const resolveAndEnqueue = async () => {
-      const resolvedSize = await this.#resolveJobSize(options);
-      const normalizedSize = this.#normalizeJobSize(resolvedSize);
-      this.#insertPendingJobOrdered({
-        jobKey,
-        jobType: jobType || 'background-job',
-        jobId: options?.jobId || jobKey,
-        jobSize: normalizedSize,
-        getProgress: typeof options?.getProgress === 'function' ? options.getProgress : null,
-        runJob,
-        enqueueOrder: this.enqueueSequence++
-      });
-      this.ensureHeartbeatRunning();
-      console.log(`[OCL] ${jobType || 'Background job'} enqueued: ${jobKey} (size=${normalizedSize}, queue=${this.pendingJobs.length}, active=${this.activeCount})`);
-      this.processNext();
-    };
-
-    Promise.resolve()
-      .then(resolveAndEnqueue)
-      .catch((error) => {
-        this.queuedOrRunningKeys.delete(jobKey);
-        const message = error && error.message ? error.message : String(error);
-        console.error(`[OCL] Failed to enqueue background job: ${jobType || 'background-job'} ${jobKey}: ${message}`);
-      });
-
-    return true;
-  }
-
-  static async #resolveJobSize(options = {}) {
-    if (typeof options?.resolveJobSize === 'function') {
-      try {
-        return await options.resolveJobSize();
-      } catch (_error) {
-        return this.UNKNOWN_JOB_SIZE;
-      }
-    }
-
-    if (options && Object.prototype.hasOwnProperty.call(options, 'jobSize')) {
-      return options.jobSize;
-    }
-
-    return this.UNKNOWN_JOB_SIZE;
-  }
-
-  static #normalizeJobSize(jobSize) {
-    const parsed = Number.parseInt(jobSize, 10);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      return this.UNKNOWN_JOB_SIZE;
-    }
-    return parsed;
-  }
-
-  static #insertPendingJobOrdered(job) {
-    let index = this.pendingJobs.findIndex(existing => {
-      if (existing.jobSize === job.jobSize) {
-        return existing.enqueueOrder > job.enqueueOrder;
-      }
-      return existing.jobSize > job.jobSize;
-    });
-
-    if (index < 0) {
-      index = this.pendingJobs.length;
-    }
-
-    this.pendingJobs.splice(index, 0, job);
-  }
-
-  static isQueuedOrRunning(jobKey) {
-    return this.queuedOrRunningKeys.has(jobKey);
-  }
-
-  static ensureHeartbeatRunning() {
-    if (this.heartbeatTimer) {
-      return;
-    }
-
-    this.heartbeatTimer = setInterval(() => {
-      this.logHeartbeat();
-    }, this.HEARTBEAT_INTERVAL_MS);
-
-    // Do not keep the process alive only for telemetry logs.
-    if (typeof this.heartbeatTimer.unref === 'function') {
-      this.heartbeatTimer.unref();
-    }
-  }
-
-  static logHeartbeat() {
-    const activeJobs = Array.from(this.activeJobs.values());
-    const lines = [
-      '[OCL] OCL background status:',
-      ` active jobs: ${activeJobs.length}`,
-      ` queued jobs: ${this.pendingJobs.length}`
-    ];
-
-    activeJobs.forEach((job, index) => {
-      lines.push('');
-      lines.push(` job ${index + 1}:`);
-      lines.push(`   type: ${job.jobType || 'background-job'}`);
-      lines.push(`   id: ${job.jobId || job.jobKey}`);
-      lines.push(`   size: ${job.jobSize}`);
-      lines.push(`   progress: ${this.formatProgress(job.getProgress)}`);
-    });
-
-    console.log(lines.join('\n'));
-  }
-
-  static formatProgress(getProgress) {
-    if (typeof getProgress !== 'function') {
-      return 'unknown';
-    }
-
-    try {
-      const progress = getProgress();
-      if (typeof progress === 'number' && Number.isFinite(progress)) {
-        const bounded = Math.max(0, Math.min(100, progress));
-        return `${Math.round(bounded)}%`;
-      }
-
-      if (progress && typeof progress === 'object') {
-        if (typeof progress.percentage === 'number' && Number.isFinite(progress.percentage)) {
-          const bounded = Math.max(0, Math.min(100, progress.percentage));
-          return `${Math.round(bounded)}%`;
-        }
-
-        if (
-          typeof progress.processed === 'number' &&
-          Number.isFinite(progress.processed) &&
-          typeof progress.total === 'number' &&
-          Number.isFinite(progress.total) &&
-          progress.total > 0
-        ) {
-          const ratio = progress.processed / progress.total;
-          const bounded = Math.max(0, Math.min(100, ratio * 100));
-          return `${Math.round(bounded)}%`;
-        }
-      }
-    } catch (error) {
-      return 'unknown';
-    }
-
-    return 'unknown';
-  }
-
-  static processNext() {
-    while (this.activeCount < this.MAX_CONCURRENT && this.pendingJobs.length > 0) {
-      const job = this.pendingJobs.shift();
-      this.activeCount += 1;
-      this.activeJobs.set(job.jobKey, {
-        jobKey: job.jobKey,
-        jobType: job.jobType,
-        jobId: job.jobId || job.jobKey,
-        jobSize: job.jobSize,
-        getProgress: job.getProgress || null,
-        startedAt: Date.now()
-      });
-      console.log(`[OCL] Background job started: ${job.jobType} ${job.jobKey} (size=${job.jobSize}, queue=${this.pendingJobs.length}, active=${this.activeCount})`);
-
-      Promise.resolve()
-        .then(() => job.runJob())
-        .then(() => {
-          console.log(`[OCL] Background job completed: ${job.jobType} ${job.jobKey}`);
-        })
-        .catch((error) => {
-          const message = error && error.message ? error.message : String(error);
-          console.error(`[OCL] Background job failed: ${job.jobType} ${job.jobKey}: ${message}`);
-        })
-        .finally(() => {
-          this.activeCount -= 1;
-          this.queuedOrRunningKeys.delete(job.jobKey);
-          this.activeJobs.delete(job.jobKey);
-          console.log(`[OCL] Background queue status: queue=${this.pendingJobs.length}, active=${this.activeCount}`);
-          this.processNext();
-        });
-    }
-  }
-}
 
 class OCLCodeSystemProvider extends AbstractCodeSystemProvider {
   constructor(config = {}) {
     super();
     const options = typeof config === 'string' ? { baseUrl: config } : (config || {});
 
-    this.baseUrl = (options.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.org = options.org || null;
-
-    const headers = {
-      Accept: 'application/json',
-      'User-Agent': 'FHIRSmith-OCL-Provider/1.0'
-    };
-
-    if (options.token) {
-      headers.Authorization = options.token.startsWith('Token ') || options.token.startsWith('Bearer ')
-        ? options.token
-        : `Token ${options.token}`;
-    }
-
-    this.httpClient = axios.create({
-      baseURL: this.baseUrl,
-      timeout: options.timeout || 30000,
-      headers
-    });
+    const http = createOclHttpClient(options);
+    this.baseUrl = http.baseUrl;
+    this.httpClient = http.client;
 
     this._codeSystemsByCanonical = new Map();
     this._idToCodeSystem = new Map();
@@ -954,82 +516,24 @@ class OCLCodeSystemProvider extends AbstractCodeSystemProvider {
   }
 
   async #fetchAllPages(path) {
-    const results = [];
-    let page = 1;
-    let nextPath = path;
-    let usePageMode = true;
-
-    while (nextPath) {
-      try {
-        const response = usePageMode
-          ? await this.httpClient.get(path, { params: { page, limit: PAGE_SIZE } })
-          : await this.httpClient.get(nextPath);
-
-        if (Array.isArray(response.data)) {
-          results.push(...response.data);
-          if (response.data.length < PAGE_SIZE) {
-            break;
-          }
-          page += 1;
-          nextPath = path;
-          continue;
-        }
-
-        const { items, next } = this.#extractItemsAndNext(response.data);
-        results.push(...items);
-
-        if (next) {
-          usePageMode = false;
-          nextPath = next;
-          continue;
-        }
-
-        if (usePageMode && items.length >= PAGE_SIZE) {
-          page += 1;
-          nextPath = path;
-        } else {
-          break;
-        }
-      } catch (error) {
-        console.error(`[OCL] Fetch error on page ${page}:`, error.message);
-        if (error.response) {
-          console.error(`[OCL] HTTP ${error.response.status}: ${error.response.statusText}`);
-          console.error(`[OCL] Response:`, error.response.data);
-        }
-        throw error;
+    try {
+      return await fetchAllPages(this.httpClient, path, {
+        pageSize: PAGE_SIZE,
+        baseUrl: this.baseUrl,
+        logger: console,
+        loggerPrefix: '[OCL]'
+      });
+    } catch (error) {
+      if (error.response) {
+        console.error(`[OCL] HTTP ${error.response.status}: ${error.response.statusText}`);
+        console.error('[OCL] Response:', error.response.data);
       }
+      throw error;
     }
-
-    return results;
   }
 
   #extractItemsAndNext(payload) {
-    if (Array.isArray(payload)) {
-      return { items: payload, next: null };
-    }
-
-    if (!payload || typeof payload !== 'object') {
-      return { items: [], next: null };
-    }
-
-    const items = Array.isArray(payload.results)
-      ? payload.results
-      : Array.isArray(payload.items)
-        ? payload.items
-        : Array.isArray(payload.data)
-          ? payload.data
-          : [];
-
-    const next = payload.next || null;
-    if (!next) {
-      return { items, next: null };
-    }
-
-    if (next.startsWith(this.baseUrl)) {
-      return { items, next: next.replace(this.baseUrl, '') };
-    }
-
-    return { items, next };
+    return extractItemsAndNext(payload, this.baseUrl);
   }
 
   #toIsoDate(value) {
@@ -1641,62 +1145,7 @@ class OCLSourceCodeSystemProvider extends CodeSystemProvider {
   }
 
   #toConceptContext(concept) {
-    if (!concept || typeof concept !== 'object') {
-      return null;
-    }
-
-    const code = concept.code || concept.id || null;
-    if (!code) {
-      return null;
-    }
-
-    return {
-      code,
-      display: concept.display_name || concept.display || concept.name || null,
-      definition: concept.description || concept.definition || null,
-      retired: concept.retired === true,
-      designations: this.#extractDesignations(concept)
-    };
-  }
-
-  #extractDesignations(concept) {
-    const result = [];
-    const seen = new Set();
-
-    const add = (language, value) => {
-      const text = typeof value === 'string' ? value.trim() : '';
-      if (!text) {
-        return;
-      }
-      const lang = typeof language === 'string' ? language.trim() : '';
-      const key = `${lang}|${text}`;
-      if (seen.has(key)) {
-        return;
-      }
-      seen.add(key);
-      result.push({ language: lang, value: text });
-    };
-
-    if (Array.isArray(concept.names)) {
-      for (const entry of concept.names) {
-        if (!entry || typeof entry !== 'object') {
-          continue;
-        }
-        add(entry.locale || entry.language || entry.lang || '', entry.name || entry.display_name || entry.display || entry.value || entry.term);
-      }
-    }
-
-    if (concept.display_name || concept.display || concept.name) {
-      add(concept.locale || concept.default_locale || concept.language || '', concept.display_name || concept.display || concept.name);
-    }
-
-    if (concept.locale_display_names && typeof concept.locale_display_names === 'object') {
-      for (const [lang, value] of Object.entries(concept.locale_display_names)) {
-        add(lang, value);
-      }
-    }
-
-    return result;
+    return toConceptContext(concept);
   }
 }
 
@@ -1782,7 +1231,7 @@ class OCLSourceCodeSystemFactory extends CodeSystemFactoryProvider {
     const cacheFilePath = getCacheFilePath(CACHE_CS_DIR, canonicalUrl, version);
 
     try {
-      await ensureCacheDirectories();
+      await ensureCacheDirectories(CACHE_CS_DIR, CACHE_VS_DIR);
 
       const fingerprint = computeCodeSystemFingerprint(concepts);
       const cacheData = {
@@ -2199,62 +1648,7 @@ class OCLSourceCodeSystemFactory extends CodeSystemFactoryProvider {
   }
 
   #toConceptContext(concept) {
-    if (!concept || typeof concept !== 'object') {
-      return null;
-    }
-
-    const code = concept.code || concept.id || null;
-    if (!code) {
-      return null;
-    }
-
-    return {
-      code,
-      display: concept.display_name || concept.display || concept.name || null,
-      definition: concept.description || concept.definition || null,
-      retired: concept.retired === true,
-      designations: this.#extractDesignations(concept)
-    };
-  }
-
-  #extractDesignations(concept) {
-    const result = [];
-    const seen = new Set();
-
-    const add = (language, value) => {
-      const text = typeof value === 'string' ? value.trim() : '';
-      if (!text) {
-        return;
-      }
-      const lang = typeof language === 'string' ? language.trim() : '';
-      const key = `${lang}|${text}`;
-      if (seen.has(key)) {
-        return;
-      }
-      seen.add(key);
-      result.push({ language: lang, value: text });
-    };
-
-    if (Array.isArray(concept.names)) {
-      for (const entry of concept.names) {
-        if (!entry || typeof entry !== 'object') {
-          continue;
-        }
-        add(entry.locale || entry.language || entry.lang || '', entry.name || entry.display_name || entry.display || entry.value || entry.term);
-      }
-    }
-
-    if (concept.display_name || concept.display || concept.name) {
-      add(concept.locale || concept.default_locale || concept.language || '', concept.display_name || concept.display || concept.name);
-    }
-
-    if (concept.locale_display_names && typeof concept.locale_display_names === 'object') {
-      for (const [lang, value] of Object.entries(concept.locale_display_names)) {
-        add(lang, value);
-      }
-    }
-
-    return result;
+    return toConceptContext(concept);
   }
 
   system() {

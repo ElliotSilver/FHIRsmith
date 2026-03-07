@@ -1,6 +1,4 @@
-const axios = require('axios');
 const fs = require('fs/promises');
-const fsSync = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 const { AbstractValueSetProvider } = require('../vs/vs-api');
@@ -9,151 +7,24 @@ const ValueSet = require('../library/valueset');
 const { SearchFilterText } = require('../library/designations');
 const { TxParameters } = require('../params');
 const { OCLSourceCodeSystemFactory, OCLBackgroundJobQueue } = require('./cs-ocl');
+const { PAGE_SIZE, CONCEPT_PAGE_SIZE, FILTERED_CONCEPT_PAGE_SIZE, COLD_CACHE_FRESHNESS_MS } = require('./shared/constants');
+const { createOclHttpClient } = require('./http/client');
+const { CACHE_VS_DIR, getCacheFilePath } = require('./cache/cache-paths');
+const { ensureCacheDirectories, getColdCacheAgeMs, formatCacheAgeMinutes } = require('./cache/cache-utils');
+const { computeValueSetExpansionFingerprint } = require('./fingerprint/fingerprint');
+const { ensureTxParametersHashIncludesFilter } = require('./shared/patches');
 
-const DEFAULT_BASE_URL = 'https://oclapi2.ips.hsl.org.br';
-const PAGE_SIZE = 100;
-const CONCEPT_PAGE_SIZE = 1000;
-const FILTERED_CONCEPT_PAGE_SIZE = 200;
-const COLD_CACHE_FRESHNESS_MS = 60 * 60 * 1000;
-
-// Cold cache configuration (import from cs-ocl)
-const CACHE_BASE_DIR = path.join(process.cwd(), 'data', 'terminology-cache', 'ocl');
-const CACHE_VS_DIR = path.join(CACHE_BASE_DIR, 'valuesets');
-const TXPARAMS_HASH_PATCH_FLAG = Symbol.for('fhirsmith.ocl.txparameters.hash.filter.patch');
-
-function normalizeFilterForCacheKey(filter) {
-  if (typeof filter !== 'string') {
-    return '';
-  }
-
-  // OCL filter matching is case-insensitive and trims surrounding whitespace.
-  return filter.trim().toLowerCase();
-}
-
-function ensureTxParametersHashIncludesFilter() {
-  const proto = TxParameters && TxParameters.prototype;
-  if (!proto || proto[TXPARAMS_HASH_PATCH_FLAG] === true || typeof proto.hashSource !== 'function') {
-    return;
-  }
-
-  const originalHashSource = proto.hashSource;
-  proto.hashSource = function hashSourceWithFilter() {
-    const base = originalHashSource.call(this);
-    const normalizedFilter = normalizeFilterForCacheKey(this.filter);
-    return `${base}|filter=${normalizedFilter}`;
-  };
-
-  Object.defineProperty(proto, TXPARAMS_HASH_PATCH_FLAG, {
-    value: true,
-    writable: false,
-    configurable: false,
-    enumerable: false
-  });
-}
-
-ensureTxParametersHashIncludesFilter();
-
-// Cache file utilities
-async function ensureCacheDirectories() {
-  try {
-    await fs.mkdir(CACHE_VS_DIR, { recursive: true });
-  } catch (error) {
-    console.error('[OCL-ValueSet] Failed to create cache directories:', error.message);
-  }
-}
-
-// ValueSet expansion fingerprint computation
-function computeValueSetExpansionFingerprint(expansion) {
-  if (!expansion || !Array.isArray(expansion.contains) || expansion.contains.length === 0) {
-    return null;
-  }
-
-  // Normalize expansion entries to deterministic strings
-  const normalized = expansion.contains
-    .map(entry => {
-      if (!entry || !entry.code) {
-        return null;
-      }
-      const system = String(entry.system || '');
-      const code = String(entry.code || '');
-      const display = String(entry.display || '');
-      const inactive = entry.inactive === true ? '1' : '0';
-      return `${system}|${code}|${display}|${inactive}`;
-    })
-    .filter(Boolean)
-    .sort();
-
-  // Compute SHA256 hash
-  const hash = crypto.createHash('sha256');
-  for (const item of normalized) {
-    hash.update(item);
-    hash.update('\n');
-  }
-  return hash.digest('hex');
-}
-
-function sanitizeFilename(text) {
-  if (!text || typeof text !== 'string') {
-    return 'unknown';
-  }
-  return text
-    .replace(/[^a-zA-Z0-9._-]/g, '_')
-    .replace(/_+/g, '_')
-    .substring(0, 200);
-}
-
-function getCacheFilePath(baseDir, canonicalUrl, version = null, paramsKey = 'default') {
-  const filename = sanitizeFilename(canonicalUrl)
-    + (version ? `_${sanitizeFilename(version)}` : '')
-    + (paramsKey && paramsKey !== 'default' ? `_p_${sanitizeFilename(paramsKey)}` : '')
-    + '.json';
-  return path.join(baseDir, filename);
-}
-
-function getColdCacheAgeMs(cacheFilePath) {
-  try {
-    const stats = fsSync.statSync(cacheFilePath);
-    if (!stats || !Number.isFinite(stats.mtimeMs)) {
-      return null;
-    }
-    return Math.max(0, Date.now() - stats.mtimeMs);
-  } catch (error) {
-    if (error && error.code !== 'ENOENT') {
-      console.error(`[OCL-ValueSet] Failed to inspect cold cache file ${cacheFilePath}: ${error.message}`);
-    }
-    return null;
-  }
-}
-
-function formatCacheAgeMinutes(ageMs) {
-  const minutes = Math.max(1, Math.round(ageMs / 60000));
-  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-}
+ensureTxParametersHashIncludesFilter(TxParameters);
 
 class OCLValueSetProvider extends AbstractValueSetProvider {
   constructor(config = {}) {
     super();
     const options = typeof config === 'string' ? { baseUrl: config } : (config || {});
 
-    this.baseUrl = (options.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.org = options.org || null;
-
-    const headers = {
-      Accept: 'application/json',
-      'User-Agent': 'FHIRSmith-OCL-Provider/1.0'
-    };
-
-    if (options.token) {
-      headers.Authorization = options.token.startsWith('Token ') || options.token.startsWith('Bearer ')
-        ? options.token
-        : `Token ${options.token}`;
-    }
-
-    this.httpClient = axios.create({
-      baseURL: this.baseUrl,
-      timeout: options.timeout || 30000,
-      headers
-    });
+    const http = createOclHttpClient(options);
+    this.baseUrl = http.baseUrl;
+    this.httpClient = http.client;
 
     this.valueSetMap = new Map();
     this._idMap = new Map();
@@ -197,16 +68,21 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
           }
 
           const paramsKey = cached.paramsKey || 'default';
-          const cacheKey = `${cached.canonicalUrl}|${cached.version || ''}|${paramsKey}`;
+          const cacheKey = this.#expansionCacheKey(
+            { url: cached.canonicalUrl, version: cached.version || null },
+            paramsKey
+          );
+          const createdAt = cached.timestamp ? new Date(cached.timestamp).getTime() : null;
           this.backgroundExpansionCache.set(cacheKey, {
             expansion: cached.expansion,
             metadataSignature: cached.metadataSignature || null,
             dependencyChecksums: cached.dependencyChecksums || {},
-            createdAt: cached.timestamp ? new Date(cached.timestamp).getTime() : Date.now()
+            createdAt: Number.isFinite(createdAt) ? createdAt : null
           });
 
           this.valueSetFingerprints.set(cacheKey, cached.fingerprint || null);
           loadedCount++;
+          console.log(`[OCL-ValueSet] Loaded ValueSet from cold cache: ${cached.canonicalUrl}`);
         } catch (error) {
           console.error(`[OCL-ValueSet] Failed to load cold cache file ${file}:`, error.message);
         }
@@ -232,7 +108,7 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
     const cacheFilePath = getCacheFilePath(CACHE_VS_DIR, canonicalUrl, version, paramsKey);
 
     try {
-      await ensureCacheDirectories();
+      await ensureCacheDirectories(CACHE_VS_DIR);
 
       const fingerprint = computeValueSetExpansionFingerprint(expansion);
       const cacheData = {
@@ -474,7 +350,16 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
   }
 
   #indexValueSet(vs) {
-    this.#invalidateExpansionCache(vs);
+    const existing = this.valueSetMap.get(vs.url)
+      || (vs.version ? this.valueSetMap.get(`${vs.url}|${vs.version}`) : null)
+      || this._idMap.get(vs.id)
+      || null;
+
+    // Preserve hydrated cold-cache expansions on first index; invalidate only on replacement.
+    if (existing && existing !== vs) {
+      this.#invalidateExpansionCache(vs);
+    }
+
     this.valueSetMap.set(vs.url, vs);
     if (vs.version) {
       this.valueSetMap.set(`${vs.url}|${vs.version}`, vs);
@@ -977,7 +862,7 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
     // Treat cache as fresh when either file mtime or persisted timestamp is recent.
     const freshnessCandidates = [cacheAgeFromFileMs, cacheAgeFromMetadataMs].filter(age => age != null);
     const freshestCacheAgeMs = freshnessCandidates.length > 0 ? Math.min(...freshnessCandidates) : null;
-    if (freshestCacheAgeMs != null && freshestCacheAgeMs < COLD_CACHE_FRESHNESS_MS) {
+    if (freshestCacheAgeMs != null && freshestCacheAgeMs <= COLD_CACHE_FRESHNESS_MS) {
       const freshnessSource = cacheAgeFromFileMs != null && cacheAgeFromMetadataMs != null
         ? 'file+metadata'
         : cacheAgeFromFileMs != null
@@ -995,6 +880,10 @@ class OCLValueSetProvider extends AbstractValueSetProvider {
     }
 
     let queuedJobSize = null;
+    const warmupAgeText = freshestCacheAgeMs != null
+      ? formatCacheAgeMinutes(freshestCacheAgeMs)
+      : 'no cold cache';
+    console.log(`[OCL-ValueSet] Enqueueing warm-up for ValueSet ${vs.url} (cold cache age: ${warmupAgeText})`);
     console.log(`[OCL-ValueSet] ValueSet expansion enqueued: ${cacheKey}`);
     OCLBackgroundJobQueue.enqueue(
       jobKey,

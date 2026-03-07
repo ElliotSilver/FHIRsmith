@@ -1,9 +1,9 @@
-const axios = require('axios');
 const { AbstractConceptMapProvider } = require('../cm/cm-api');
 const { ConceptMap } = require('../library/conceptmap');
+const { PAGE_SIZE } = require('./shared/constants');
+const { createOclHttpClient } = require('./http/client');
+const { fetchAllPages, extractItemsAndNext } = require('./http/pagination');
 
-const DEFAULT_BASE_URL = 'https://oclapi2.ips.hsl.org.br';
-const PAGE_SIZE = 100;
 const DEFAULT_MAX_SEARCH_PAGES = 10;
 
 class OCLConceptMapProvider extends AbstractConceptMapProvider {
@@ -11,26 +11,11 @@ class OCLConceptMapProvider extends AbstractConceptMapProvider {
     super();
     const options = typeof config === 'string' ? { baseUrl: config } : (config || {});
 
-    this.baseUrl = (options.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.org = options.org || null;
     this.maxSearchPages = options.maxSearchPages || DEFAULT_MAX_SEARCH_PAGES;
-
-    const headers = {
-      Accept: 'application/json',
-      'User-Agent': 'FHIRSmith-OCL-Provider/1.0'
-    };
-
-    if (options.token) {
-      headers.Authorization = options.token.startsWith('Token ') || options.token.startsWith('Bearer ')
-        ? options.token
-        : `Token ${options.token}`;
-    }
-
-    this.httpClient = axios.create({
-      baseURL: this.baseUrl,
-      timeout: options.timeout || 30000,
-      headers
-    });
+    const http = createOclHttpClient(options);
+    this.baseUrl = http.baseUrl;
+    this.httpClient = http.client;
 
     this.conceptMapMap = new Map();
     this._idMap = new Map();
@@ -366,76 +351,16 @@ class OCLConceptMapProvider extends AbstractConceptMapProvider {
   }
 
   async #fetchAllPages(path, params = {}, maxPages = this.maxSearchPages) {
-    const results = [];
-    let page = 1;
-    let nextPath = path;
-    let pageCount = 0;
-    let usePageMode = true;
-
-    while (nextPath && pageCount < maxPages) {
-      const response = usePageMode
-        ? await this.httpClient.get(path, { params: { ...params, page, limit: PAGE_SIZE } })
-        : await this.httpClient.get(nextPath);
-
-      if (Array.isArray(response.data)) {
-        results.push(...response.data);
-        pageCount += 1;
-        if (response.data.length < PAGE_SIZE) {
-          break;
-        }
-        page += 1;
-        nextPath = path;
-        continue;
-      }
-
-      const { items, next } = this.#extractItemsAndNext(response.data);
-      results.push(...items);
-      pageCount += 1;
-
-      if (next) {
-        usePageMode = false;
-        nextPath = next;
-        continue;
-      }
-
-      if (usePageMode && items.length >= PAGE_SIZE && pageCount < maxPages) {
-        page += 1;
-        nextPath = path;
-      } else {
-        break;
-      }
-    }
-
-    return results;
+    return await fetchAllPages(this.httpClient, path, {
+      params,
+      pageSize: PAGE_SIZE,
+      maxPages,
+      baseUrl: this.baseUrl
+    });
   }
 
   #extractItemsAndNext(payload) {
-    if (Array.isArray(payload)) {
-      return { items: payload, next: null };
-    }
-
-    if (!payload || typeof payload !== 'object') {
-      return { items: [], next: null };
-    }
-
-    const items = Array.isArray(payload.results)
-      ? payload.results
-      : Array.isArray(payload.items)
-        ? payload.items
-        : Array.isArray(payload.data)
-          ? payload.data
-          : [];
-
-    const next = payload.next || null;
-    if (!next) {
-      return { items, next: null };
-    }
-
-    if (next.startsWith(this.baseUrl)) {
-      return { items, next: next.replace(this.baseUrl, '') };
-    }
-
-    return { items, next };
+    return extractItemsAndNext(payload, this.baseUrl);
   }
 
   #extractMappingId(url) {
