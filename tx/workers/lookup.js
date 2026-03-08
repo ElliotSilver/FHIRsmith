@@ -106,17 +106,11 @@ class LookupWorker extends TerminologyWorker {
 
       // Determine how the code system is identified
       let csProvider;
-      let system;
-      let version;
       let code;
 
       if (params.has('coding')) {
         // Coding parameter provided - extract system, version, code
         const coding = params.get('coding');
-        system = coding.system;
-        version = coding.version || params.get('version') || '';
-        code = coding.code;
-
         if (!coding.system) {
           return res.status(400).json(this.operationOutcome('error', 'invalid',
             'Coding parameter must include a system'));
@@ -126,21 +120,22 @@ class LookupWorker extends TerminologyWorker {
             'Coding parameter must include a code'));
         }
 
+        // Allow complete or fragment content modes, nullOk = true to handle not-found ourselves
+        csProvider = await this.findCodeSystem(coding.system, coding.version || '', txp, ['complete', 'fragment'], true);
+        this.seeSourceProvider(csProvider, coding.system);
+        code = coding.code;
+
       } else if (params.has('system') && params.has('code')) {
         // system + code parameters
-        system = params.get('system');
-        version = params.get('version') || '';
+        csProvider = await this.findCodeSystem(params.get('system'), params.get('version') || '', txp, ['complete', 'fragment'],
+          null, true, false, false, txp.supplements);
+        this.seeSourceProvider(csProvider, params.get('system'));
         code = params.get('code');
 
       } else {
         return res.status(400).json(this.operationOutcome('error', 'invalid',
           'Must provide either coding parameter, or system and code parameters'));
       }
-
-      // Use one common resolution path so equivalent GET/POST inputs behave identically.
-      csProvider = await this.findCodeSystem(system, version, txp, ['complete', 'fragment'],
-        null, true, false, false, txp.supplements);
-      this.seeSourceProvider(csProvider, system);
 
       if (!csProvider) {
         const systemUrl = params.system || params.coding?.system;

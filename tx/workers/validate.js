@@ -1892,14 +1892,10 @@ class ValidateWorker extends TerminologyWorker {
         throw new Issue('error', 'invalid', null, null, 'Unable to find code to validate (looked for coding | codeableConcept | code in parameters)', null, 400).handleAsOO(400);
       }
 
-      // For CodeSystem/$validate-code, align POST codeableConcept with GET url+code behavior
-      // unless display was explicitly provided as an operation parameter.
-      const codedForValidation = this.normalizeCodeSystemInput(coded, mode, params);
-
       // Get the CodeSystem - from parameter or by url
-      const codeSystem = await this.resolveCodeSystem(params, txp, codedForValidation?.coding?.[0] ?? null, mode);
+      const codeSystem = await this.resolveCodeSystem(params, txp, coded?.coding?.[0] ?? null, mode);
       if (!codeSystem) {
-        if (!codedForValidation?.coding?.[0].system) {
+        if (!coded?.coding?.[0].system) {
           let msg = this.i18n.translate('Coding_has_no_system__cannot_validate', txp.HTTPLanguages, []);
           throw new Issue('warning', 'invalid', mode.issuePath, 'Coding_has_no_system__cannot_validate', msg, 'invalid-data');
         } else {
@@ -1911,10 +1907,7 @@ class ValidateWorker extends TerminologyWorker {
       }
 
       // Perform validation
-      const result = await this.doValidationCS(codedForValidation, codeSystem, txp, mode);
-      if (codedForValidation !== coded) {
-        this.restoreOriginalCodeableConcept(result, coded);
-      }
+      const result = await this.doValidationCS(coded, codeSystem, txp, mode);
       if (req) {
         req.logInfo = this.usedSources.join("|") + txp.logInfo();
       }
@@ -1973,13 +1966,8 @@ class ValidateWorker extends TerminologyWorker {
           'Unable to find code to validate (looked for coding | codeableConcept | code in parameters =codingX:Coding)'));
       }
 
-      const codedForValidation = this.normalizeCodeSystemInput(coded, mode, params);
-
       // Perform validation
-      const result = await this.doValidationCS(codedForValidation, csp, txp, mode);
-      if (codedForValidation !== coded) {
-        this.restoreOriginalCodeableConcept(result, coded);
-      }
+      const result = await this.doValidationCS(coded, csp, txp, mode);
       req.logInfo = this.usedSources.join("|") + txp.logInfo();
       return res.json(result);
 
@@ -2255,76 +2243,6 @@ class ValidateWorker extends TerminologyWorker {
     }
 
     return null;
-  }
-
-  normalizeCodeSystemInput(coded, mode, params) {
-    if (!coded) {
-      return coded;
-    }
-
-    // Keep POST Coding + operation params equivalent to GET ?system&code&display&version.
-    if (mode?.mode === 'coding' && Array.isArray(coded.coding) && coded.coding.length > 0) {
-      const [first, ...rest] = coded.coding;
-      const normalizedCoding = {...first};
-
-      const opSystem = this.getStringParam(params, 'system') || this.getStringParam(params, 'url');
-      const opCode = this.getStringParam(params, 'code');
-      const opVersion = this.getStringParam(params, 'version');
-      const opDisplay = this.getStringParam(params, 'display');
-
-      if (!normalizedCoding.system && opSystem) {
-        normalizedCoding.system = opSystem;
-      }
-      if (!normalizedCoding.code && opCode) {
-        normalizedCoding.code = opCode;
-      }
-      if (!normalizedCoding.version && opVersion) {
-        normalizedCoding.version = opVersion;
-      }
-      if (opDisplay) {
-        normalizedCoding.display = opDisplay;
-      }
-
-      return {
-        ...coded,
-        coding: [normalizedCoding, ...rest]
-      };
-    }
-
-    if (mode?.mode !== 'codeableConcept') {
-      return coded;
-    }
-
-    // If display is explicitly requested as an operation parameter, preserve strict display validation.
-    if (this.getStringParam(params, 'display')) {
-      return coded;
-    }
-
-    if (!Array.isArray(coded.coding) || coded.coding.length === 0) {
-      return coded;
-    }
-
-    const normalized = {
-      ...coded,
-      coding: coded.coding.map(c => {
-        const nc = {};
-        if (c?.system !== undefined) nc.system = c.system;
-        if (c?.code !== undefined) nc.code = c.code;
-        if (c?.version !== undefined) nc.version = c.version;
-        return nc;
-      })
-    };
-    return normalized;
-  }
-
-  restoreOriginalCodeableConcept(result, originalCoded) {
-    if (!result?.parameter || !originalCoded) {
-      return;
-    }
-    const ccParam = result.parameter.find(p => p.name === 'codeableConcept');
-    if (ccParam && ccParam.valueCodeableConcept) {
-      ccParam.valueCodeableConcept = originalCoded;
-    }
   }
 
   // ========== Validation Logic ==========
