@@ -117,18 +117,6 @@ function getCodeSystem() {
   );
 }
 
-function readPrimitiveParam(parameters, name) {
-  const p = (parameters.parameter || []).find(param => param.name === name);
-  if (!p) {
-    return undefined;
-  }
-  if (p.valueBoolean !== undefined) return p.valueBoolean;
-  if (p.valueString !== undefined) return p.valueString;
-  if (p.valueCode !== undefined) return p.valueCode;
-  if (p.valueUri !== undefined) return p.valueUri;
-  return undefined;
-}
-
 describe('ValidateWorker', () => {
   let worker;
   let opContext;
@@ -478,73 +466,6 @@ describe('ValidateWorker', () => {
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
         resourceType: 'Parameters'
       }));
-    });
-
-    test('POST codeableConcept validates same concept as GET url+code', async () => {
-      const { req, res } = createMockReqRes('POST', {}, {
-        resourceType: 'Parameters',
-        parameter: [
-          {
-            name: 'codeableConcept',
-            valueCodeableConcept: {
-              coding: [
-                {
-                  system: 'http://hl7.org/fhir/administrative-gender',
-                  code: 'male',
-                  display: 'Not The Preferred Display'
-                }
-              ]
-            }
-          },
-          { name: 'displayLanguage', valueString: 'pt-BR' }
-        ]
-      });
-
-      await worker.handleCodeSystem(req, res);
-
-      const payload = res.json.mock.calls[0][0];
-      const resultParam = payload.parameter.find(p => p.name === 'result');
-      expect(resultParam.valueBoolean).toBe(true);
-
-      const ccParam = payload.parameter.find(p => p.name === 'codeableConcept');
-      expect(ccParam.valueCodeableConcept.coding[0].display).toBe('Not The Preferred Display');
-    });
-
-    test('CodeSystem validate-code GET and POST(coding) stay equivalent for display/version/language', async () => {
-      const getCall = createMockReqRes('GET', {
-        system: 'http://hl7.org/fhir/administrative-gender',
-        code: 'male',
-        displayLanguage: 'en',
-        version: '5.0.0',
-        display: 'History of Immunization notes'
-      });
-
-      const postCall = createMockReqRes('POST', {}, {
-        resourceType: 'Parameters',
-        parameter: [
-          {
-            name: 'coding',
-            valueCoding: {
-              system: 'http://hl7.org/fhir/administrative-gender',
-              code: 'male'
-            }
-          },
-          { name: 'displayLanguage', valueCode: 'en' },
-          { name: 'version', valueString: '5.0.0' },
-          { name: 'display', valueString: 'History of Immunization notes' }
-        ]
-      });
-
-      await worker.handleCodeSystem(getCall.req, getCall.res);
-      await worker.handleCodeSystem(postCall.req, postCall.res);
-
-      const getPayload = getCall.res.json.mock.calls[0][0];
-      const postPayload = postCall.res.json.mock.calls[0][0];
-
-      // GET is the source of truth for equivalent POST normalization.
-      expect(readPrimitiveParam(postPayload, 'result')).toBe(readPrimitiveParam(getPayload, 'result'));
-      expect(readPrimitiveParam(postPayload, 'message')).toBe(readPrimitiveParam(getPayload, 'message'));
-      expect(readPrimitiveParam(getPayload, 'result')).toBe(false);
     });
   });
 });

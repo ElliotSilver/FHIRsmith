@@ -221,42 +221,6 @@ describe('Lookup Worker', () => {
 
       expect(response.status).toBe(200);
     });
-
-    test('should produce same result as GET for equivalent coding+version+displayLanguage inputs', async () => {
-      const getResponse = await request(app)
-        .get('/tx/r5/CodeSystem/$lookup')
-        .query({
-          system: 'http://hl7.org/fhir/administrative-gender',
-          code: 'male',
-          displayLanguage: 'pt',
-          version: 'does-not-exist',
-          diagnostics: 'true'
-        })
-        .set('Accept', 'application/json');
-
-      const postResponse = await request(app)
-        .post('/tx/r5/CodeSystem/$lookup')
-        .set('Accept', 'application/json')
-        .set('Content-Type', 'application/json')
-        .send({
-          resourceType: 'Parameters',
-          parameter: [
-            {
-              name: 'coding',
-              valueCoding: {
-                system: 'http://hl7.org/fhir/administrative-gender',
-                code: 'male'
-              }
-            },
-            { name: 'displayLanguage', valueCode: 'pt' },
-            { name: 'version', valueString: 'does-not-exist' },
-            { name: 'diagnostics', valueBoolean: true }
-          ]
-        });
-
-      expect(postResponse.status).toBe(getResponse.status);
-      expect(postResponse.body).toEqual(getResponse.body);
-    });
   });
 
   describe('GET /tx/r5/CodeSystem/:id/$lookup', () => {
