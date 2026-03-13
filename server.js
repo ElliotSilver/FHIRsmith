@@ -436,9 +436,11 @@ app.get('/', async (req, res) => {
       const html = htmlServer.renderPage('root', escape(config.hostName) || 'FHIRsmith Server', content, stats);
       res.setHeader('Content-Type', 'text/html');
       res.send(html);
+      return;
     } catch (error) {
       serverLog.error('Error rendering root page:', error);
       htmlServer.sendErrorResponse(res, 'root', error);
+      return;
     }
   } else {
     return serveFhirsmithHome(req, res);
@@ -624,9 +626,11 @@ async function serveFhirsmithHome(req, res) {
       const html = htmlServer.renderPage('root', escape(config.hostName) || 'FHIRsmith Server', content, stats);
       res.setHeader('Content-Type', 'text/html');
       res.send(html);
+      return;
     } catch (error) {
       serverLog.error('Error rendering root page:', error);
       htmlServer.sendErrorResponse(res, 'root', error);
+      return;
     }
   } else {
     // Return JSON response for API clients

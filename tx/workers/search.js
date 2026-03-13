@@ -7,6 +7,7 @@
 
 const { TerminologyWorker } = require('./worker');
 const {Utilities} = require("../../library/utilities");
+const {debugLog} = require("../operation-context");
 
 class SearchWorker extends TerminologyWorker {
   /**
@@ -117,7 +118,7 @@ class SearchWorker extends TerminologyWorker {
 
     } catch (error) {
       this.log.error(error);
-      this.debugLog(error);
+      debugLog(error);
       req.logInfo = "error "+(error.msgId || error.className);
       return res.status(500).json({
         resourceType: 'OperationOutcome',
@@ -140,7 +141,7 @@ class SearchWorker extends TerminologyWorker {
     const searchParams = {};
     for (const [key, value] of Object.entries(params)) {
       if (!key.startsWith('_') && value && SearchWorker.ALLOWED_PARAMS.includes(key)) {
-        searchParams[key] = value.toLowerCase();
+        searchParams[key] = key == 'url' ? value : value.toLowerCase();
       }
     }
 
@@ -149,6 +150,7 @@ class SearchWorker extends TerminologyWorker {
 
     for (const [key, cs] of this.provider.codeSystems) {
       this.deadCheck('searchCodeSystems');
+
       if (key == cs.vurl) {
         const json = cs.jsonObj;
 
@@ -160,10 +162,6 @@ class SearchWorker extends TerminologyWorker {
         // Check each search parameter for partial match
         let isMatch = true;
         for (const [param, searchValue] of Object.entries(searchParams)) {
-          // 'system' doesn't do anything for CodeSystem search
-          if (param === 'system') {
-            continue;
-          }
 
           // Map content-mode to content property
           const jsonProp = param === 'content-mode' ? 'content' : param;
@@ -180,9 +178,9 @@ class SearchWorker extends TerminologyWorker {
               isMatch = false;
               break;
             }
-          } else if (param === 'url') { // exact match
+          } else if (param === 'url' || param === 'system') { // exact match
             const propValue = json.url;
-            if (propValue != searchValue) {
+            if (propValue !== searchValue) {
               isMatch = false;
               break;
             }

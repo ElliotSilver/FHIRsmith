@@ -290,8 +290,8 @@ class TxHtmlRenderer {
       return await this.buildHomePage(req);
     } else {
       try {
-        const _fmt = req.query._format || req.query.format || req.body?._format;
-        const op = req.path.includes("$");
+        const _fmt = req?.query?._format || req?.query?.format || req?.body?._format;
+        const op = req ? req.path.includes("$") : false;
         const resourceType = json.resourceType;
 
         switch (resourceType) {
@@ -673,7 +673,7 @@ class TxHtmlRenderer {
           if (exp instanceof ValueSet) {
             html += await this.renderer.renderVSExpansion(exp.jsonObj, false)
           } else {
-            html += `<p>Error: {$exp}</p>`;
+            html += `<p>Error: `+exp.message+`</p>`;
           }
         }
       } else if (_fmt == "html/json") {
@@ -1246,7 +1246,7 @@ class TxHtmlRenderer {
   }
 
   buildSourceOptions(provider) {
-    let result = '';
+    let result = '<option value=""></option>';
     result += `<option value="internal">internal</option>`;
     for (let sp of provider.listValueSetSourceCodes()) {
       result += `<option value="${sp}">${sp}</option>`;

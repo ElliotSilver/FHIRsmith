@@ -9,6 +9,7 @@ const {
   ServerVersionInformation,
 } = require('./model');
 const {Extensions} = require("../tx/library/extensions");
+const {debugLog} = require("../tx/operation-context");
 
 const MASTER_URL = 'https://fhir.github.io/ig-registry/tx-servers.json';
 
@@ -31,6 +32,7 @@ class RegistryCrawler {
     this.errors = [];
     this.totalBytes = 0;
     this.log = console;
+    this.abortController = null;
   }
 
   useLog(logv) {
@@ -48,6 +50,7 @@ class RegistryCrawler {
       this.addLogEntry('warn', 'Crawl already in progress, skipping...');
       return this.currentData;
     }
+    this.abortController = new AbortController();
 
     this.isCrawling = true;
     const startTime = new Date();
@@ -75,6 +78,7 @@ class RegistryCrawler {
       // Process each registry
       const registries = masterJson.registries || [];
       for (const registryConfig of registries) {
+        if (this.abortController?.signal.aborted) break;
         const registry = await this.processRegistry(registryConfig);
         if (registry) {
           newData.registries.push(registry);
@@ -86,7 +90,7 @@ class RegistryCrawler {
       // Update the current data
       this.currentData = newData;
     } catch (error) {
-      console.log(error);
+      debugLog(error);
       this.addLogEntry('error', 'Exception Scanning:', error);
       this.currentData.outcome = `Error: ${error.message}`;
       this.errors.push({
@@ -118,7 +122,7 @@ class RegistryCrawler {
     }
     
     if (!registry.address) {
-      this.addLogEntry('error', `No url provided for ${registry.name, registry.name}`, '');
+      this.addLogEntry('error', `No url provided for ${registry.name}`, '');
       return registry;
     }
     
@@ -134,6 +138,7 @@ class RegistryCrawler {
       // Process each server in the registry
       const servers = registryJson.servers || [];
       for (const serverConfig of servers) {
+        if (this.abortController?.signal.aborted) break;
         const server = await this.processServer(serverConfig, registry.address);
         if (server) {
           registry.servers.push(server);
@@ -141,7 +146,7 @@ class RegistryCrawler {
       }
       
     } catch (error) {
-      console.log(error);
+      debugLog(error);
       registry.error = error.message;
       this.addLogEntry('error', `Exception processing registry ${registry.name}: ${error.message}`, registry.address);
     }
@@ -177,6 +182,7 @@ class RegistryCrawler {
     // Process each FHIR version
     const fhirVersions = serverConfig.fhirVersions || [];
     for (const versionConfig of fhirVersions) {
+      if (this.abortController?.signal.aborted) break;
       const version = await this.processServerVersion(versionConfig, server, serverConfig.exclusions);
       if (version) {
         server.versions.push(version);
@@ -231,7 +237,7 @@ class RegistryCrawler {
       this.addLogEntry('info', `  Server ${version.address}: ${version.lastTat} for ${version.codeSystems.length} CodeSystems and ${version.valueSets.length} ValueSets`);
       
     } catch (error) {
-      console.log(error);
+      debugLog(error);
       const elapsed = Date.now() - startTime;
       this.addLogEntry('error', `Server ${version.address}: Error after ${elapsed}ms: ${error.message}`);
       version.error = error.message;
@@ -276,10 +282,11 @@ class RegistryCrawler {
         });
       }
     } catch (error) {
-      console.log(error);
-      this.addLogEntry('error', `Could not fetch terminology capabilities: ${error.message}`);
+      debugLog(error);
+      this.addLogEntry('error', `Could not fetch terminology capabilities from ${version.address}: ${error.message}`);
     }
-    
+
+    if (this.abortController?.signal.aborted) return;
     // Search for value sets
     await this.fetchValueSets(version, server, exclusions);
   }
@@ -324,8 +331,8 @@ class RegistryCrawler {
         });
       }
     } catch (error) {
-      console.log(error);
-      this.addLogEntry('error', `Could not fetch terminology capabilities: ${error.message}`);
+      debugLog(error);
+      this.addLogEntry('error', `Could not fetch terminology capabilities from ${version.address}: ${error.message}`);
     }
     
     // Search for value sets
@@ -342,14 +349,20 @@ class RegistryCrawler {
    */
   async fetchValueSets(version, server, exclusions) {
     // Initial search URL
+    let count = 0;
     let searchUrl = `${version.address}/ValueSet?_elements=url,version`+(version.address.includes("fhir.org") ? "&_count=200" : "");
     try {
       // Set of URLs to avoid duplicates
       const valueSetUrls = new Set();
 
-
       // Continue fetching while we have a URL
       while (searchUrl) {
+        count++;
+        if (count == 1000) {
+          throw new Error(`Fetch ValueSet loop exceeded 1000 iterations - a logic problem on the server? (${version.address})`);
+        }
+
+        if (this.abortController?.signal.aborted) break;
         this.log.debug(`Fetching value sets from ${searchUrl}`);
         const bundle = await this.fetchJson(searchUrl, server.code);
 
@@ -382,7 +395,7 @@ class RegistryCrawler {
       version.valueSets = Array.from(valueSetUrls).sort();
 
     } catch (error) {
-      console.log(error);
+      debugLog(error);
       this.addLogEntry('error', `Could not fetch value sets: ${error.message} from ${searchUrl}`);
     }
   }
@@ -441,6 +454,7 @@ class RegistryCrawler {
       const response = await axios.get(fetchUrl, {
         timeout: this.config.timeout,
         headers: headers,
+        signal: this.abortController?.signal,
         validateStatus: (status) => status < 500 // Don't throw on 4xx
       });
       
@@ -459,7 +473,7 @@ class RegistryCrawler {
       return response.data;
       
     } catch (error) {
-      console.log(error);
+      debugLog(error);
       if (error.response) {
         throw new Error(`HTTP ${error.response.status}: ${error.response.statusText}`);
       } else if (error.request) {
@@ -603,14 +617,14 @@ class RegistryCrawler {
    * @param {string} level - Filter by log level
    * @returns {Array} Array of log entries
    */
-  getLogs(limit = 100)
+  getLogs(limit = 100, level = null)
   {
     if (!this.logs) {
       return [];
     }
 
     // Filter by level if specified
-    let filteredLogs = this.logs;
+    let filteredLogs = level ? this.logs.filter(entry => entry.level === level) : this.logs;
 
     // Get the latest entries up to the limit
     return filteredLogs.slice(-limit);
@@ -648,6 +662,13 @@ class RegistryCrawler {
     }
     return false;
   }
+
+  shutdown() {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+  }
+
 }
 
 module.exports = RegistryCrawler;
