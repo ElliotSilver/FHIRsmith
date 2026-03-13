@@ -2154,7 +2154,7 @@ class Renderer {
   /**
    * Extract a value from a dependsOn or product list by attribute name.
    */
-  getDependsOnValue(list, attribute, withSystem) {
+  getDependsOnValue(list, attribute) {
     if (!list) return null;
     for (const item of list) {
       if (item.attribute === attribute) {
@@ -2171,6 +2171,7 @@ class Renderer {
   /**
    * Extract a display from a dependsOn or product list by attribute name.
    */
+  // eslint-disable-next-line no-unused-vars
   getDependsOnDisplay(list, attribute) {
     // In current FHIR, dependsOn display is not directly available;
     // would require a lookup. Return null for now (matches Java which also returns null).
