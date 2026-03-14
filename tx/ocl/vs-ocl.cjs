@@ -27,13 +27,6 @@ function normalizeCanonicalSystem(system) {
     return trimmed;
   }
 
-  // Normalize protocol and remove duplicate slashes everywhere
-  trimmed = trimmed.replace(/^https:[^/]/, 'https://');
-  trimmed = trimmed.replace(/^http:[^/]/, 'http://');
-  // Remove all duplicate slashes except after protocol
-  trimmed = trimmed.replace(/([^:])\/+/g, '$1/');
-  // Remove trailing slashes
-  trimmed = trimmed.replace(/\/+$/, '');
   return trimmed;
 }
 

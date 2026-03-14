@@ -26,14 +26,6 @@ function normalizeCanonicalSystem(system) {
     return trimmed;
   }
 
-  // Normalize protocol and remove duplicate slashes everywhere
-  // Fix protocol (http:/, https:/, etc)
-  trimmed = trimmed.replace(/^https:[^/]/, 'https://');
-  trimmed = trimmed.replace(/^http:[^/]/, 'http://');
-  // Remove all duplicate slashes except after protocol
-  trimmed = trimmed.replace(/([^:])\/+/g, '$1/');
-  // Remove trailing slashes
-  trimmed = trimmed.replace(/\/+$/, '');
   return trimmed;
 }
 
@@ -524,24 +516,14 @@ class OCLCodeSystemProvider extends AbstractCodeSystemProvider {
   }
 
   #normalizePath(pathValue) {
+    // Não normaliza nem remove barras, retorna exatamente o valor fornecido pelo autor
     if (!pathValue) {
       return null;
     }
     if (typeof pathValue !== 'string') {
       return null;
     }
-    if (pathValue.startsWith('http://') || pathValue.startsWith('https://')) {
-      return pathValue;
-    }
-    // Remove extra slashes and normalize full URL
-    let base = this.baseUrl.replace(/\/+$/, '');
-    let path = pathValue.replace(/^\/+/, '');
-    let url = `${base}/${path}`;
-    // Remove all duplicate slashes except after protocol
-    url = url.replace(/([^:])\/+/g, '$1/');
-    // Remove trailing slashes
-    url = url.replace(/\/+$/, '');
-    return url;
+    return pathValue;
   }
 
   async #fetchAllPages(path) {
