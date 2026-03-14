@@ -4,7 +4,7 @@ describe('Package dependencies format', () => {
 
   // Test that the crawler dependency format matches what the reader expects
   describe('crawler dependency extraction', () => {
-    test('dependencies use # separator (FHIR convention)', () => {
+    test('dependencies use @ separator (npm convention)', () => {
       // Simulate what the crawler does at package-crawler.js:518-524
       const packageJson = {
         dependencies: {
@@ -15,12 +15,12 @@ describe('Package dependencies format', () => {
 
       const dependencies = [];
       for (const [dep, ver] of Object.entries(packageJson.dependencies)) {
-        dependencies.push(`${dep}#${ver}`);
+        dependencies.push(`${dep}@${ver}`);
       }
 
       expect(dependencies).toEqual([
-        'hl7.fhir.r4.core#4.0.1',
-        'hl7.fhir.uv.ips#1.1.0'
+        'hl7.fhir.r4.core@4.0.1',
+        'hl7.fhir.uv.ips@1.1.0'
       ]);
     });
 
@@ -29,15 +29,15 @@ describe('Package dependencies format', () => {
       const dependencies = [];
       if (packageJson.dependencies) {
         for (const [dep, ver] of Object.entries(packageJson.dependencies)) {
-          dependencies.push(`${dep}#${ver}`);
+          dependencies.push(`${dep}@${ver}`);
         }
       }
       expect(dependencies).toEqual([]);
     });
   });
 
-  // Test that the reader (getPackageDependencies) correctly parses # format
-  describe('dependency parsing with # separator', () => {
+  // Test that the reader (getPackageDependencies) correctly parses @ format
+  describe('dependency parsing with @ separator', () => {
     let db;
 
     beforeAll((done) => {
@@ -54,11 +54,11 @@ describe('Package dependencies format', () => {
       db.close(done);
     });
 
-    test('parses dependencies stored with # separator', (done) => {
+    test('parses dependencies stored with @ separator', (done) => {
       const deps = [
-        [1, 'hl7.fhir.r4.core#4.0.1'],
-        [1, 'hl7.fhir.uv.ips#1.1.0'],
-        [2, 'hl7.fhir.r5.core#5.0.0']
+        [1, 'hl7.fhir.r4.core@4.0.1'],
+        [1, 'hl7.fhir.uv.ips@1.1.0'],
+        [2, 'hl7.fhir.r5.core@5.0.0']
       ];
 
       const inserts = deps.map(([key, dep]) =>
@@ -69,7 +69,7 @@ describe('Package dependencies format', () => {
       );
 
       Promise.all(inserts).then(() => {
-        // Replicate getPackageDependencies logic from packages.js:1702-1734
+        // Replicate getPackageDependencies logic from packages.js
         const packageVersionKeys = [1, 2];
         const placeholders = packageVersionKeys.map(() => '?').join(',');
         const sql = `SELECT PackageVersionKey, Dependency FROM PackageDependencies WHERE PackageVersionKey IN (${placeholders})`;
@@ -83,10 +83,10 @@ describe('Package dependencies format', () => {
               result[row.PackageVersionKey] = {};
             }
             const dependency = row.Dependency;
-            const hashIndex = dependency.indexOf('#');
-            if (hashIndex > 0) {
-              const depName = dependency.substring(0, hashIndex);
-              const depVersion = dependency.substring(hashIndex + 1);
+            const atIndex = dependency.indexOf('@');
+            if (atIndex > 0) {
+              const depName = dependency.substring(0, atIndex);
+              const depVersion = dependency.substring(atIndex + 1);
               result[row.PackageVersionKey][depName] = depVersion;
             }
           }
@@ -103,8 +103,8 @@ describe('Package dependencies format', () => {
       });
     });
 
-    test('dependencies with @ separator are NOT parsed (old bug format)', (done) => {
-      db.run('INSERT INTO PackageDependencies VALUES (?, ?)', [3, 'hl7.fhir.r4.core@4.0.1'], (err) => {
+    test('dependencies with # separator are NOT parsed', (done) => {
+      db.run('INSERT INTO PackageDependencies VALUES (?, ?)', [3, 'hl7.fhir.r4.core#4.0.1'], (err) => {
         if (err) return done(err);
 
         db.all('SELECT PackageVersionKey, Dependency FROM PackageDependencies WHERE PackageVersionKey = 3', [], (err, rows) => {
@@ -116,15 +116,15 @@ describe('Package dependencies format', () => {
               result[row.PackageVersionKey] = {};
             }
             const dependency = row.Dependency;
-            const hashIndex = dependency.indexOf('#');
-            if (hashIndex > 0) {
-              const depName = dependency.substring(0, hashIndex);
-              const depVersion = dependency.substring(hashIndex + 1);
+            const atIndex = dependency.indexOf('@');
+            if (atIndex > 0) {
+              const depName = dependency.substring(0, atIndex);
+              const depVersion = dependency.substring(atIndex + 1);
               result[row.PackageVersionKey][depName] = depVersion;
             }
           }
 
-          // @ format should NOT be parsed — this was the bug
+          // # format should NOT be parsed by the @ reader
           expect(result[3]).toEqual({});
           done();
         });
